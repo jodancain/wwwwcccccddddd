@@ -109,9 +109,11 @@ class TrainingPipeline:
                 f"🎉 分身模型已部署! API: http://localhost:{self.inference_port}/v1")
 
         except Exception as e:
-            logger.error(f"Pipeline failed: {e}")
-            self.error = str(e)
-            await self._update(PipelineStage.FAILED, self.progress, f"失败: {e}")
+            import traceback
+            err_msg = str(e) or traceback.format_exc()[-200:]
+            logger.error(f"Pipeline failed: {err_msg}")
+            self.error = err_msg
+            await self._update(PipelineStage.FAILED, self.progress, f"失败: {err_msg}")
         finally:
             self._running = False
 
@@ -124,46 +126,50 @@ class TrainingPipeline:
 
     async def _install_deps(self):
         """Install LLaMA-Factory and dependencies for QLoRA."""
-        deps_to_check = [
-            ("llamafactory", "llamafactory"),
-            ("bitsandbytes", "bitsandbytes"),
-            ("peft", "peft"),
-            ("trl", "trl"),
-            ("accelerate", "accelerate"),
-        ]
-
+        # Check what's already installed
         missing = []
-        for pkg_name, import_name in deps_to_check:
+        for pkg in ["llamafactory", "bitsandbytes", "peft", "accelerate"]:
             try:
-                __import__(import_name)
+                __import__(pkg)
             except ImportError:
-                missing.append(pkg_name)
+                missing.append(pkg)
 
         if not missing:
             await self._update(PipelineStage.INSTALLING, 100, "所有依赖已就绪")
             return
 
-        await self._update(PipelineStage.INSTALLING, 20, f"正在安装: {', '.join(missing)}...")
+        # Install everything in one pip call (llamafactory pulls most deps)
+        packages = ["llamafactory"]
+        if "bitsandbytes" in missing:
+            packages.append("bitsandbytes")
 
-        # Install llamafactory
-        if "llamafactory" in missing:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "pip", "install",
-                "llamafactory[torch,metrics]", "--quiet",
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-            )
-            await proc.wait()
-            await self._update(PipelineStage.INSTALLING, 60, "LLaMA-Factory 已安装")
+        await self._update(PipelineStage.INSTALLING, 10,
+            f"正在安装依赖 (可能需要几分钟)...")
 
-        # Install QLoRA deps
-        other_missing = [p for p in missing if p != "llamafactory"]
-        if other_missing:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "pip", "install",
-                *other_missing, "--quiet",
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-            )
-            await proc.wait()
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "pip", "install", *packages,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+
+        # Stream output to track progress
+        line_count = 0
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                break
+            text = line.decode(errors="ignore").strip()
+            line_count += 1
+            if text and ("Collecting" in text or "Installing" in text or "Successfully" in text):
+                pct = min(90, 10 + line_count)
+                await self._update(PipelineStage.INSTALLING, pct, text[:80])
+            if self._cancel:
+                proc.terminate()
+                return
+
+        await proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError("依赖安装失败，请手动运行: pip install llamafactory bitsandbytes")
 
         await self._update(PipelineStage.INSTALLING, 100, "依赖安装完成")
 
