@@ -16,6 +16,7 @@ from app.ai.context_builder import (
     build_conversation_context,
     build_global_context,
 )
+from app.skills.manager import build_skill_system_prompt
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -31,6 +32,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = ""
     talker: str = ""
+    active_skill: str = ""  # skill slug to activate
 
 
 class SuggestRequest(BaseModel):
@@ -68,8 +70,15 @@ async def ai_chat(req: ChatRequest):
 
     ai_messages.append({"role": "user", "content": req.message})
 
+    # Build system prompt (with skill if active)
+    sys_prompt = SYSTEM_PROMPT
+    if req.active_skill:
+        skill_prompt = build_skill_system_prompt(req.active_skill)
+        if skill_prompt:
+            sys_prompt = f"{SYSTEM_PROMPT}\n\n{skill_prompt}"
+
     # Call AI
-    response = await provider.chat(ai_messages, system_prompt=SYSTEM_PROMPT)
+    response = await provider.chat(ai_messages, system_prompt=sys_prompt)
 
     # Save messages
     await db.save_ai_message(session_id, "user", req.message)
@@ -110,10 +119,17 @@ async def ai_chat_stream(req: ChatRequest):
 
     ai_messages.append({"role": "user", "content": req.message})
 
+    # Build system prompt (with skill if active)
+    sys_prompt = SYSTEM_PROMPT
+    if req.active_skill:
+        skill_prompt = build_skill_system_prompt(req.active_skill)
+        if skill_prompt:
+            sys_prompt = f"{SYSTEM_PROMPT}\n\n{skill_prompt}"
+
     async def generate():
         full_response = ""
         try:
-            async for chunk in provider.chat_stream(ai_messages, system_prompt=SYSTEM_PROMPT):
+            async for chunk in provider.chat_stream(ai_messages, system_prompt=sys_prompt):
                 full_response += chunk
                 yield f"data: {json.dumps({'chunk': chunk, 'session_id': session_id}, ensure_ascii=False)}\n\n"
 

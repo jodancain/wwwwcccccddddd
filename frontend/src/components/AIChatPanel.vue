@@ -4,9 +4,13 @@
     <div class="ai-panel-header">
       <h3>AI 助手</h3>
       <div class="ai-header-right">
+        <span v-if="activeSkill" class="ai-skill-badge" @click="showSkillPanel = true" :title="'Skill: ' + activeSkill.name">
+          🎭 {{ activeSkill.name }}
+        </span>
         <span v-if="currentTalker" class="ai-context-badge" :title="currentTalkerName">
           📎 {{ currentTalkerName }}
         </span>
+        <button class="ai-skill-btn" @click="showSkillPanel = true" title="管理 Skills">🧩</button>
         <button class="ai-new-chat-btn" @click="onNewChat" title="新对话">＋</button>
       </div>
     </div>
@@ -34,6 +38,7 @@
       <button class="quick-action-btn" @click="quickAction('分析对方的语气和意图')">🎯 分析语气</button>
       <button class="quick-action-btn" @click="fetchSuggestions">⚡ 快速回复</button>
       <button class="quick-action-btn global-summary-btn" @click="showGlobalPanel = true">🌐 总结全部聊天</button>
+      <button v-if="currentTalker" class="quick-action-btn skill-gen-btn" @click="generateSkillForCurrentTalker">🎭 生成人物画像</button>
     </div>
 
     <!-- Global Summary Panel -->
@@ -63,6 +68,49 @@
         <div v-if="globalLoading && !globalResult" class="gs-loading">
           <div class="streaming-indicator"><span></span><span></span><span></span></div>
           <span>正在读取并分析所有聊天记录...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Skill Management Panel -->
+    <div v-if="showSkillPanel" class="global-summary-overlay" @click.self="showSkillPanel = false">
+      <div class="global-summary-panel skill-panel">
+        <div class="gs-header">
+          <h4>🧩 人物 Skills 管理</h4>
+          <button class="gs-close" @click="showSkillPanel = false">&times;</button>
+        </div>
+
+        <!-- Import -->
+        <div class="gs-options">
+          <input v-model="importUrl" class="gs-custom-input" placeholder="GitHub URL 导入 (如 https://github.com/user/skill-repo)..." />
+          <button class="gs-run-btn" style="padding:6px 14px;font-size:12px;" :disabled="!importUrl.trim() || skillImporting" @click="doImportSkill">
+            {{ skillImporting ? '导入中...' : '导入' }}
+          </button>
+        </div>
+
+        <!-- Skill list -->
+        <div class="skill-list">
+          <div v-if="skills.length === 0" class="skill-empty">暂无 Skills，可导入或从聊天生成</div>
+          <div v-for="s in skills" :key="s.slug" class="skill-card" :class="{ active: activeSkill?.slug === s.slug }">
+            <div class="skill-card-info">
+              <div class="skill-card-name">🎭 {{ s.name || s.slug }}</div>
+              <div class="skill-card-desc">{{ s.description || '' }}</div>
+            </div>
+            <div class="skill-card-actions">
+              <button v-if="activeSkill?.slug !== s.slug" class="skill-btn activate" @click="activateSkill(s)">激活</button>
+              <button v-else class="skill-btn deactivate" @click="deactivateSkill()">取消</button>
+              <button class="skill-btn delete" @click="doDeleteSkill(s.slug)">删除</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Generate from current chat -->
+        <div v-if="currentTalker" class="skill-generate-section">
+          <div class="skill-generate-title">从当前对话生成</div>
+          <button class="gs-run-btn" :disabled="skillGenerating" @click="generateSkillForCurrentTalker" style="width:100%;">
+            {{ skillGenerating ? '正在分析聊天记录...' : `为「${currentTalkerName}」生成人物画像` }}
+          </button>
+          <div v-if="skillGenResult" class="gs-result" v-html="renderContent(skillGenResult)"></div>
         </div>
       </div>
     </div>
@@ -135,9 +183,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, onMounted } from 'vue'
 import { useAIChat } from '../composables/useAIChat'
-import { globalSummaryStream } from '../api'
+import { globalSummaryStream, listSkills, importSkill, deleteSkill as apiDeleteSkill, generateSkillStream } from '../api'
 import { marked } from 'marked'
 
 const props = defineProps<{
@@ -158,6 +206,15 @@ const globalCustomMsg = ref('')
 const globalLoading = ref(false)
 const globalResult = ref('')
 
+// Skills state
+const showSkillPanel = ref(false)
+const skills = ref<any[]>([])
+const activeSkill = ref<any>(null)
+const importUrl = ref('')
+const skillImporting = ref(false)
+const skillGenerating = ref(false)
+const skillGenResult = ref('')
+
 function renderContent(content: string) {
   try { return marked.parse(content, { breaks: true }) } catch { return content }
 }
@@ -166,7 +223,7 @@ function handleSend() {
   const text = inputText.value.trim()
   if (!text || aiChat.loading.value) return
   inputText.value = ''
-  aiChat.sendMessage(text, props.currentTalker)
+  aiChat.sendMessage(text, props.currentTalker, activeSkill.value?.slug || '')
   scrollToBottom()
 }
 
@@ -211,6 +268,59 @@ async function runGlobalSummary() {
     globalLoading.value = false
   }
 }
+
+// === Skill functions ===
+async function loadSkills() {
+  try { skills.value = await listSkills() } catch { skills.value = [] }
+}
+
+function activateSkill(skill: any) {
+  activeSkill.value = skill
+  showSkillPanel.value = false
+}
+
+function deactivateSkill() {
+  activeSkill.value = null
+}
+
+async function doImportSkill() {
+  if (!importUrl.value.trim() || skillImporting.value) return
+  skillImporting.value = true
+  try {
+    const result = await importSkill(importUrl.value.trim())
+    if (result.error) { alert('导入失败: ' + result.error); return }
+    importUrl.value = ''
+    await loadSkills()
+  } catch (err: any) { alert('导入失败: ' + err.message) }
+  finally { skillImporting.value = false }
+}
+
+async function doDeleteSkill(slug: string) {
+  if (!confirm(`确认删除 skill "${slug}"？`)) return
+  try {
+    await apiDeleteSkill(slug)
+    if (activeSkill.value?.slug === slug) activeSkill.value = null
+    await loadSkills()
+  } catch {}
+}
+
+async function generateSkillForCurrentTalker() {
+  if (!props.currentTalker || skillGenerating.value) return
+  skillGenerating.value = true
+  skillGenResult.value = ''
+  showSkillPanel.value = true
+  try {
+    const stream = generateSkillStream(props.currentTalker)
+    for await (const data of stream) {
+      if (data.chunk) skillGenResult.value += data.chunk
+      if (data.done) { await loadSkills() }
+      if (data.error) skillGenResult.value += `\n\nError: ${data.error}`
+    }
+  } catch (err: any) { skillGenResult.value = `Error: ${err.message}` }
+  finally { skillGenerating.value = false }
+}
+
+onMounted(() => { loadSkills() })
 
 function onSwitchSession(sid: string) {
   aiChat.loadSession(sid)

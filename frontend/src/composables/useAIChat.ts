@@ -73,7 +73,7 @@ export function useAIChat() {
     quickReplies.value = []
   }
 
-  async function sendMessage(message: string, talker: string) {
+  async function sendMessage(message: string, talker: string, activeSkill: string = '') {
     if (loading.value || !message.trim()) return
 
     messages.value.push({
@@ -90,6 +90,7 @@ export function useAIChat() {
         message,
         session_id: sessionId.value,
         talker,
+        active_skill: activeSkill,
       })
 
       for await (const data of stream) {

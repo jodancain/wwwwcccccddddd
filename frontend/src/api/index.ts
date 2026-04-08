@@ -27,6 +27,37 @@ export const getContacts = (params: {
   search?: string; type?: string; limit?: number; offset?: number
 }) => api.get('/contacts/', { params }).then(r => r.data)
 
+// Skills
+export const listSkills = () => api.get('/skills/').then(r => r.data)
+export const getSkill = (slug: string) => api.get(`/skills/${slug}`).then(r => r.data)
+export const saveSkill = (slug: string, content: string) =>
+  api.post('/skills/save', { slug, content }).then(r => r.data)
+export const deleteSkill = (slug: string) => api.delete(`/skills/${slug}`).then(r => r.data)
+export const importSkill = (url: string) => api.post('/skills/import', { url }).then(r => r.data)
+
+export async function* generateSkillStream(talker: string) {
+  const response = await fetch('/api/skills/generate/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ talker }),
+  })
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try { yield JSON.parse(line.slice(6)) } catch {}
+      }
+    }
+  }
+}
+
 // AI Chat
 export const aiChat = (data: { message: string; session_id?: string; talker?: string }) =>
   api.post('/ai/chat', data).then(r => r.data)
@@ -82,7 +113,7 @@ export async function* globalSummaryStream(data: { hours?: number; message?: str
 }
 
 // AI Stream chat
-export async function* aiChatStream(data: { message: string; session_id?: string; talker?: string }) {
+export async function* aiChatStream(data: { message: string; session_id?: string; talker?: string; active_skill?: string }) {
   const response = await fetch('/api/ai/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
