@@ -256,6 +256,45 @@ class AppDatabase:
 
     # --- Sync State ---
 
+    # --- Chat APIs ---
+
+    async def create_chat_api(self, api_id: str, talker: str, api_key: str, name: str = "") -> dict:
+        await self._db.execute(
+            "INSERT INTO chat_apis (id, talker, api_key, name) VALUES (?, ?, ?, ?)",
+            (api_id, talker, api_key, name),
+        )
+        await self._db.commit()
+        return {"id": api_id, "talker": talker, "api_key": api_key, "name": name, "enabled": 1}
+
+    async def list_chat_apis(self) -> list[dict]:
+        rows = await self._db.execute_fetchall(
+            """SELECT a.*, c.nickname, c.remark, c.is_group
+               FROM chat_apis a
+               LEFT JOIN contacts c ON a.talker = c.username
+               ORDER BY a.created_at DESC"""
+        )
+        return [dict(r) for r in rows]
+
+    async def get_chat_api_by_key(self, api_key: str) -> dict | None:
+        rows = await self._db.execute_fetchall(
+            "SELECT * FROM chat_apis WHERE api_key = ? AND enabled = 1", (api_key,)
+        )
+        return dict(rows[0]) if rows else None
+
+    async def delete_chat_api(self, api_id: str) -> bool:
+        cursor = await self._db.execute("DELETE FROM chat_apis WHERE id = ?", (api_id,))
+        await self._db.commit()
+        return (cursor.rowcount or 0) > 0
+
+    async def toggle_chat_api(self, api_id: str) -> dict | None:
+        await self._db.execute(
+            "UPDATE chat_apis SET enabled = CASE WHEN enabled=1 THEN 0 ELSE 1 END WHERE id = ?",
+            (api_id,),
+        )
+        await self._db.commit()
+        rows = await self._db.execute_fetchall("SELECT * FROM chat_apis WHERE id = ?", (api_id,))
+        return dict(rows[0]) if rows else None
+
     async def get_sync_state(self) -> dict:
         rows = await self._db.execute_fetchall("SELECT * FROM sync_state WHERE id = 1")
         return dict(rows[0]) if rows else {}

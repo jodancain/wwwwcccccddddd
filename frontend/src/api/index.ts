@@ -27,6 +27,13 @@ export const getContacts = (params: {
   search?: string; type?: string; limit?: number; offset?: number
 }) => api.get('/contacts/', { params }).then(r => r.data)
 
+// Chat APIs
+export const listChatApis = () => api.get('/chat-apis/').then(r => r.data)
+export const createChatApi = (talker: string, name = '') =>
+  api.post('/chat-apis/create', { talker, name }).then(r => r.data)
+export const deleteChatApi = (id: string) => api.delete(`/chat-apis/${id}`).then(r => r.data)
+export const toggleChatApi = (id: string) => api.post(`/chat-apis/${id}/toggle`).then(r => r.data)
+
 // Skills
 export const listSkills = () => api.get('/skills/').then(r => r.data)
 export const getSkill = (slug: string) => api.get(`/skills/${slug}`).then(r => r.data)

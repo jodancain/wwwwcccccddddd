@@ -60,6 +60,15 @@ CREATE TABLE IF NOT EXISTS ai_messages (
 
 CREATE INDEX IF NOT EXISTS idx_ai_messages_session ON ai_messages(session_id);
 
+CREATE TABLE IF NOT EXISTS chat_apis (
+    id TEXT PRIMARY KEY,
+    talker TEXT NOT NULL,
+    api_key TEXT NOT NULL UNIQUE,
+    name TEXT DEFAULT '',
+    enabled INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT DEFAULT '',

@@ -57,6 +57,10 @@ app.add_middleware(
 
 app.include_router(api_router, prefix="/api")
 
+# Open API (external access with API key)
+from app.api.chat_api import open_router
+app.include_router(open_router)
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
