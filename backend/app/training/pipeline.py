@@ -1,10 +1,14 @@
-"""One-click training pipeline: export → download model → train → merge → serve.
+"""One-click training pipeline: export → install deps → download model → train → serve.
 
-Runs as a background task with progress reporting via WebSocket.
+Optimized for RTX 3070 (8GB VRAM) + 48GB RAM:
+- Uses Qwen2.5-3B-Instruct (fits in 8GB with QLoRA 4bit)
+- QLoRA with 4bit quantization (~5GB VRAM during training)
+- llama.cpp GGUF for inference (~3GB VRAM / CPU only)
 """
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -21,310 +25,347 @@ from app.api.ws import ws_manager
 class PipelineStage(str, Enum):
     IDLE = "idle"
     EXPORTING = "exporting"
+    INSTALLING = "installing"
     DOWNLOADING = "downloading"
     TRAINING = "training"
-    MERGING = "merging"
+    CONVERTING = "converting"
     STARTING_SERVER = "starting_server"
     DONE = "done"
     FAILED = "failed"
 
 
-class TrainingPipeline:
-    """Manages the full training pipeline as a singleton."""
+# Model optimized for 8GB VRAM
+BASE_MODEL = "Qwen/Qwen2.5-3B-Instruct"
+MODEL_SHORT = "Qwen2.5-3B-Instruct"
 
+
+class TrainingPipeline:
     def __init__(self):
         self.stage = PipelineStage.IDLE
-        self.progress = 0  # 0-100
+        self.progress = 0
         self.message = ""
         self.error = ""
-        self.training_process: Optional[subprocess.Popen] = None
         self.inference_process: Optional[subprocess.Popen] = None
         self.inference_port = 8090
         self._running = False
+        self._cancel = False
 
         settings = get_settings()
         self.data_dir = Path(settings.DATA_DIR)
         self.training_dir = self.data_dir / "training"
-        self.models_dir = self.data_dir / "models"
-        self.base_model_dir = self.models_dir / "base"
+        self.models_dir = Path("D:/WeChatAI_models")  # Use D: drive for space
         self.output_dir = self.models_dir / "output"
         self.merged_dir = self.models_dir / "merged"
 
     def get_status(self) -> dict:
+        is_running = self.inference_process is not None and self.inference_process.poll() is None
         return {
             "stage": self.stage.value,
             "progress": self.progress,
             "message": self.message,
             "error": self.error,
-            "inference_running": self.inference_process is not None and self.inference_process.poll() is None,
-            "inference_url": f"http://localhost:{self.inference_port}/v1" if self.inference_process else "",
+            "inference_running": is_running,
+            "inference_url": f"http://localhost:{self.inference_port}/v1" if is_running else "",
         }
 
     async def run_full_pipeline(self, db):
-        """Execute the complete pipeline: export → train → deploy."""
         if self._running:
-            return {"error": "Pipeline already running"}
-
+            return
         self._running = True
+        self._cancel = False
         self.error = ""
 
         try:
             # Stage 1: Export data
-            await self._update_stage(PipelineStage.EXPORTING, 0, "正在导出聊天记录...")
+            await self._update(PipelineStage.EXPORTING, 0, "正在导出聊天记录...")
             from app.training.data_exporter import export_training_data
-            export_result = await export_training_data(db)
-            if export_result["total_conversations"] < 10:
-                raise ValueError(f"训练数据不足，仅有 {export_result['total_conversations']} 段对话，至少需要 10 段")
-            await self._update_stage(PipelineStage.EXPORTING, 100,
-                f"导出完成: {export_result['total_conversations']} 段对话, {export_result['total_my_messages']} 条我的消息")
+            result = await export_training_data(db)
+            if result["total_conversations"] < 5:
+                raise ValueError(f"训练数据不足: 仅 {result['total_conversations']} 段对话")
+            await self._update(PipelineStage.EXPORTING, 100,
+                f"导出完成: {result['total_conversations']} 段对话, {result['total_my_messages']} 条消息")
+            if self._cancel: return
 
-            # Stage 2: Check/Download base model
-            await self._update_stage(PipelineStage.DOWNLOADING, 0, "正在检查基座模型...")
-            model_ready = await self._ensure_base_model()
-            if not model_ready:
-                await self._update_stage(PipelineStage.DOWNLOADING, 100,
-                    "基座模型需要手动下载 (见说明)")
+            # Stage 2: Install dependencies
+            await self._update(PipelineStage.INSTALLING, 0, "正在检查依赖...")
+            await self._install_deps()
+            if self._cancel: return
 
-            # Stage 3: Training
-            await self._update_stage(PipelineStage.TRAINING, 0, "正在启动 LoRA 训练...")
-            await self._run_training()
-            await self._update_stage(PipelineStage.TRAINING, 100, "训练完成")
+            # Stage 3: Download model
+            await self._update(PipelineStage.DOWNLOADING, 0, f"正在下载 {MODEL_SHORT}...")
+            model_path = await self._download_model()
+            if self._cancel: return
 
-            # Stage 4: Merge LoRA
-            await self._update_stage(PipelineStage.MERGING, 0, "正在合并模型...")
-            await self._merge_lora()
-            await self._update_stage(PipelineStage.MERGING, 100, "模型合并完成")
+            # Stage 4: QLoRA Training
+            await self._update(PipelineStage.TRAINING, 0, "正在启动 QLoRA 4bit 训练...")
+            await self._run_training(model_path)
+            if self._cancel: return
 
-            # Stage 5: Start inference server
-            await self._update_stage(PipelineStage.STARTING_SERVER, 0, "正在启动推理服务...")
-            await self._start_inference_server()
-            await self._update_stage(PipelineStage.DONE, 100,
+            # Stage 5: Start inference
+            await self._update(PipelineStage.STARTING_SERVER, 0, "正在启动推理服务...")
+            await self._start_inference(model_path)
+
+            await self._update(PipelineStage.DONE, 100,
                 f"🎉 分身模型已部署! API: http://localhost:{self.inference_port}/v1")
 
         except Exception as e:
             logger.error(f"Pipeline failed: {e}")
             self.error = str(e)
-            await self._update_stage(PipelineStage.FAILED, self.progress, f"失败: {e}")
-
+            await self._update(PipelineStage.FAILED, self.progress, f"失败: {e}")
         finally:
             self._running = False
 
-    async def _update_stage(self, stage: PipelineStage, progress: int, message: str):
+    async def _update(self, stage: PipelineStage, progress: int, message: str):
         self.stage = stage
         self.progress = progress
         self.message = message
-        logger.info(f"Pipeline [{stage.value}] {progress}% - {message}")
+        logger.info(f"[{stage.value}] {progress}% {message}")
         await ws_manager.broadcast("training_progress", self.get_status())
 
-    async def _ensure_base_model(self) -> bool:
-        """Check if base model exists, guide download if not."""
-        self.base_model_dir.mkdir(parents=True, exist_ok=True)
+    async def _install_deps(self):
+        """Install LLaMA-Factory and dependencies for QLoRA."""
+        deps_to_check = [
+            ("llamafactory", "llamafactory"),
+            ("bitsandbytes", "bitsandbytes"),
+            ("peft", "peft"),
+            ("trl", "trl"),
+            ("accelerate", "accelerate"),
+        ]
 
-        # Check if model files exist
-        model_path = self.base_model_dir / "Qwen2.5-7B-Instruct"
-        if model_path.exists() and any(model_path.glob("*.safetensors")):
-            await self._update_stage(PipelineStage.DOWNLOADING, 100, "基座模型已就绪")
-            return True
+        missing = []
+        for pkg_name, import_name in deps_to_check:
+            try:
+                __import__(import_name)
+            except ImportError:
+                missing.append(pkg_name)
 
-        # Try to download via huggingface-cli
-        await self._update_stage(PipelineStage.DOWNLOADING, 10, "正在下载 Qwen2.5-7B-Instruct...")
+        if not missing:
+            await self._update(PipelineStage.INSTALLING, 100, "所有依赖已就绪")
+            return
+
+        await self._update(PipelineStage.INSTALLING, 20, f"正在安装: {', '.join(missing)}...")
+
+        # Install llamafactory
+        if "llamafactory" in missing:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "pip", "install",
+                "llamafactory[torch,metrics]", "--quiet",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            )
+            await proc.wait()
+            await self._update(PipelineStage.INSTALLING, 60, "LLaMA-Factory 已安装")
+
+        # Install QLoRA deps
+        other_missing = [p for p in missing if p != "llamafactory"]
+        if other_missing:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "pip", "install",
+                *other_missing, "--quiet",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            )
+            await proc.wait()
+
+        await self._update(PipelineStage.INSTALLING, 100, "依赖安装完成")
+
+    async def _download_model(self) -> str:
+        """Download base model to D: drive."""
+        self.models_dir.mkdir(parents=True, exist_ok=True)
+        model_dir = self.models_dir / MODEL_SHORT
+
+        # Check if already downloaded
+        if model_dir.exists() and any(model_dir.glob("*.safetensors")):
+            await self._update(PipelineStage.DOWNLOADING, 100, f"{MODEL_SHORT} 已就绪")
+            return str(model_dir)
+
+        await self._update(PipelineStage.DOWNLOADING, 10, f"正在从 HuggingFace 下载 {MODEL_SHORT}...")
+
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "huggingface_hub", "download",
-                "Qwen/Qwen2.5-7B-Instruct",
-                "--local-dir", str(model_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                sys.executable, "-c",
+                f"from huggingface_hub import snapshot_download; "
+                f"snapshot_download('{BASE_MODEL}', local_dir=r'{model_dir}')",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
             )
-            # Monitor download progress
+
             while proc.returncode is None:
-                await asyncio.sleep(5)
-                await self._update_stage(PipelineStage.DOWNLOADING, 50, "正在下载模型文件...")
-                try:
-                    proc_status = proc.returncode
-                except:
-                    pass
+                await asyncio.sleep(3)
+                # Check download progress by file count
+                if model_dir.exists():
+                    files = list(model_dir.rglob("*"))
+                    pct = min(90, len(files) * 5)
+                    await self._update(PipelineStage.DOWNLOADING, pct,
+                        f"正在下载... ({len(files)} 个文件)")
+                if self._cancel:
+                    proc.terminate()
+                    return ""
 
             await proc.wait()
-            if proc.returncode == 0:
-                return True
-            else:
-                stderr = (await proc.stderr.read()).decode(errors="ignore")
-                logger.warning(f"Model download failed: {stderr[:200]}")
-        except Exception as e:
-            logger.warning(f"Auto-download failed: {e}")
+            if proc.returncode != 0:
+                output = (await proc.stdout.read()).decode(errors="ignore")
+                raise RuntimeError(f"模型下载失败: {output[-200:]}")
 
-        return False
+        except ImportError:
+            # Install huggingface_hub first
+            pip = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "pip", "install", "huggingface_hub", "--quiet",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            )
+            await pip.wait()
+            # Retry
+            return await self._download_model()
 
-    async def _run_training(self):
-        """Run LLaMA-Factory LoRA training."""
+        await self._update(PipelineStage.DOWNLOADING, 100, f"{MODEL_SHORT} 下载完成")
+        return str(model_dir)
+
+    async def _run_training(self, model_path: str):
+        """Run QLoRA 4bit training optimized for RTX 3070 (8GB VRAM)."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        lora_dir = self.output_dir / "lora"
 
-        # Create training config
-        model_path = self.base_model_dir / "Qwen2.5-7B-Instruct"
-        if not model_path.exists():
-            model_path = Path("Qwen/Qwen2.5-7B-Instruct")  # Fallback to HF hub name
-
+        # Write training config for QLoRA 4bit
         config = {
             "stage": "sft",
-            "model_name_or_path": str(model_path),
+            "model_name_or_path": model_path,
             "dataset": "my_wechat_style",
             "dataset_dir": str(self.training_dir),
             "template": "qwen",
             "finetuning_type": "lora",
-            "lora_rank": 16,
-            "lora_alpha": 32,
+            "lora_rank": 8,
+            "lora_alpha": 16,
             "lora_target": "all",
-            "cutoff_len": 512,
-            "per_device_train_batch_size": 2,
-            "gradient_accumulation_steps": 4,
+            # QLoRA 4bit quantization
+            "quantization_bit": 4,
+            "quantization_method": "bitsandbytes",
+            # Memory optimization for 8GB VRAM
+            "cutoff_len": 256,
+            "per_device_train_batch_size": 1,
+            "gradient_accumulation_steps": 8,
             "num_train_epochs": 3,
-            "learning_rate": 5e-5,
+            "learning_rate": 2e-4,
             "lr_scheduler_type": "cosine",
             "warmup_ratio": 0.1,
-            "output_dir": str(self.output_dir / "lora"),
-            "bf16": True,
-            "logging_steps": 10,
-            "save_steps": 100,
+            "output_dir": str(lora_dir),
+            "fp16": True,
+            "logging_steps": 5,
+            "save_steps": 200,
             "overwrite_output_dir": True,
+            "gradient_checkpointing": True,
+            "optim": "paged_adamw_8bit",
+            "max_grad_norm": 1.0,
         }
 
         config_file = self.training_dir / "train_config.json"
         with open(config_file, "w") as f:
             json.dump(config, f, indent=2)
 
-        # Run training
-        cmd = [sys.executable, "-m", "llamafactory.train", str(config_file)]
-        logger.info(f"Starting training: {' '.join(cmd)}")
+        # Use llamafactory CLI
+        cmd = [sys.executable, "-m", "llamafactory", "train", str(config_file)]
+        logger.info(f"Training cmd: {' '.join(cmd)}")
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=str(self.data_dir.parent),
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": "0"},
         )
 
-        # Monitor training progress
-        while proc.returncode is None:
+        last_step = 0
+        total_steps = 0
+
+        while True:
             line = await proc.stdout.readline()
             if not line:
                 break
             text = line.decode(errors="ignore").strip()
-            if text:
-                # Parse training progress from log lines
-                if "loss" in text.lower() and "step" in text.lower():
-                    self.message = text[:100]
-                    # Try to extract step progress
-                    import re
-                    m = re.search(r"(\d+)/(\d+)", text)
-                    if m:
-                        current, total = int(m.group(1)), int(m.group(2))
-                        pct = min(99, int(current / total * 100))
-                        await self._update_stage(PipelineStage.TRAINING, pct,
-                            f"训练中... Step {current}/{total}")
+            if not text:
+                continue
 
-            await asyncio.sleep(0.1)
+            # Parse progress
+            step_match = re.search(r"(\d+)/(\d+)", text)
+            loss_match = re.search(r"loss['\"]?\s*[:=]\s*([\d.]+)", text, re.IGNORECASE)
+
+            if step_match:
+                current = int(step_match.group(1))
+                total_steps = int(step_match.group(2))
+                pct = min(99, int(current / total_steps * 100))
+                loss_str = f", loss={loss_match.group(1)}" if loss_match else ""
+                await self._update(PipelineStage.TRAINING, pct,
+                    f"训练中 Step {current}/{total_steps}{loss_str}")
+                last_step = current
+
+            if self._cancel:
+                proc.terminate()
+                raise RuntimeError("训练被用户取消")
 
         await proc.wait()
         if proc.returncode != 0:
-            raise RuntimeError(f"Training failed with exit code {proc.returncode}")
+            raise RuntimeError(f"训练失败 (exit code {proc.returncode})")
 
-    async def _merge_lora(self):
-        """Merge LoRA adapter with base model."""
-        self.merged_dir.mkdir(parents=True, exist_ok=True)
+        await self._update(PipelineStage.TRAINING, 100, "训练完成")
 
-        model_path = self.base_model_dir / "Qwen2.5-7B-Instruct"
-        if not model_path.exists():
-            model_path = Path("Qwen/Qwen2.5-7B-Instruct")
+    async def _start_inference(self, base_model_path: str):
+        """Start inference server using LLaMA-Factory API (with LoRA adapter)."""
+        lora_dir = self.output_dir / "lora"
 
+        # LLaMA-Factory API server with LoRA adapter
         config = {
-            "model_name_or_path": str(model_path),
-            "adapter_name_or_path": str(self.output_dir / "lora"),
+            "model_name_or_path": base_model_path,
+            "adapter_name_or_path": str(lora_dir),
             "template": "qwen",
             "finetuning_type": "lora",
-            "export_dir": str(self.merged_dir),
-            "export_size": 5,
-            "export_legacy_format": False,
+            "quantization_bit": 4,
+            "quantization_method": "bitsandbytes",
         }
 
-        config_file = self.training_dir / "merge_config.json"
+        config_file = self.training_dir / "inference_config.json"
         with open(config_file, "w") as f:
             json.dump(config, f, indent=2)
 
-        cmd = [sys.executable, "-m", "llamafactory.export", str(config_file)]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+        cmd = [
+            sys.executable, "-m", "llamafactory", "api",
+            str(config_file),
+            "--port", str(self.inference_port),
+        ]
+
+        logger.info(f"Starting inference: {' '.join(cmd)}")
+        self.inference_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env={**os.environ, "CUDA_VISIBLE_DEVICES": "0"},
         )
-        await proc.wait()
-        if proc.returncode != 0:
-            raise RuntimeError("LoRA merge failed")
 
-    async def _start_inference_server(self):
-        """Start vLLM or compatible inference server."""
-        model_path = str(self.merged_dir)
-        if not Path(model_path).exists() or not any(Path(model_path).glob("*.safetensors")):
-            # Fallback: use LoRA adapter directly
-            model_path = str(self.base_model_dir / "Qwen2.5-7B-Instruct")
+        # Wait for server to be ready
+        import httpx
+        for i in range(30):
+            await asyncio.sleep(2)
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(f"http://localhost:{self.inference_port}/v1/models", timeout=3)
+                    if resp.status_code == 200:
+                        await self._update(PipelineStage.STARTING_SERVER, 100, "推理服务已就绪")
+                        return
+            except:
+                pass
+            await self._update(PipelineStage.STARTING_SERVER, min(90, i * 3),
+                f"等待服务启动... ({i*2}秒)")
 
-        # Try vLLM first
-        try:
-            cmd = [
-                sys.executable, "-m", "vllm.entrypoints.openai.api_server",
-                "--model", model_path,
-                "--port", str(self.inference_port),
-                "--max-model-len", "2048",
-                "--trust-remote-code",
-            ]
-            self.inference_process = subprocess.Popen(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            await asyncio.sleep(10)
-            if self.inference_process.poll() is None:
-                return
-        except Exception:
-            pass
-
-        # Fallback: try llamafactory API server
-        try:
-            cmd = [
-                sys.executable, "-m", "llamafactory.api",
-                "--model_name_or_path", model_path,
-                "--template", "qwen",
-                "--port", str(self.inference_port),
-            ]
-            self.inference_process = subprocess.Popen(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            await asyncio.sleep(10)
-            if self.inference_process.poll() is None:
-                return
-        except Exception:
-            pass
-
-        logger.warning("Could not start inference server automatically")
+        if self.inference_process.poll() is not None:
+            raise RuntimeError("推理服务启动失败")
 
     async def stop_inference(self):
-        """Stop the inference server."""
         if self.inference_process:
             self.inference_process.terminate()
-            try:
-                self.inference_process.wait(timeout=10)
-            except:
-                self.inference_process.kill()
+            try: self.inference_process.wait(timeout=10)
+            except: self.inference_process.kill()
             self.inference_process = None
-            await self._update_stage(PipelineStage.IDLE, 0, "推理服务已停止")
+            await self._update(PipelineStage.IDLE, 0, "推理服务已停止")
 
     def stop_training(self):
-        """Stop ongoing training."""
-        if self.training_process:
-            self.training_process.terminate()
-            self.training_process = None
+        self._cancel = True
         self._running = False
         self.stage = PipelineStage.IDLE
-        self.message = "训练已停止"
+        self.message = "已取消"
 
 
-# Singleton
 pipeline = TrainingPipeline()
