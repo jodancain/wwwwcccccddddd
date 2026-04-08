@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "Bash(netstat -ano)",
+      "Bash(tasklist //fi 'PID eq 33492')",
+      "Bash(curl -s http://127.0.0.1:5174/)",
+      "Bash(curl -v http://127.0.0.1:5174/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:5174/)",
+      "Bash(curl -s http://localhost:5175/)",
+      "Bash(python3:*)",
+      "Bash(python -c \":*)",
+      "Bash(curl -s http://127.0.0.1:8080/api/messages/?page_size=500)",
+      "Bash(curl -s http://127.0.0.1:8080/api/messages/?page_size=10)",
+      "Bash(curl -s http://127.0.0.1:8080/api/messages/?page_size=3)"
+    ]
+  }
+}

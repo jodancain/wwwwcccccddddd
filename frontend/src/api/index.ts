@@ -55,6 +55,32 @@ export const sendText = (contactName: string, content: string) =>
 // Media
 export const getImageUrl = (localId: number) => `/api/media/image/${localId}`
 
+// Global summary stream
+export async function* globalSummaryStream(data: { hours?: number; message?: string }) {
+  const response = await fetch('/api/ai/global-summary/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try { yield JSON.parse(line.slice(6)) } catch {}
+      }
+    }
+  }
+}
+
 // AI Stream chat
 export async function* aiChatStream(data: { message: string; session_id?: string; talker?: string }) {
   const response = await fetch('/api/ai/chat/stream', {

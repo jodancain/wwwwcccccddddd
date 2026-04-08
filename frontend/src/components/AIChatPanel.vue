@@ -33,6 +33,38 @@
       <button class="quick-action-btn" @click="quickAction('总结一下最近的对话内容')">📝 总结对话</button>
       <button class="quick-action-btn" @click="quickAction('分析对方的语气和意图')">🎯 分析语气</button>
       <button class="quick-action-btn" @click="fetchSuggestions">⚡ 快速回复</button>
+      <button class="quick-action-btn global-summary-btn" @click="showGlobalPanel = true">🌐 总结全部聊天</button>
+    </div>
+
+    <!-- Global Summary Panel -->
+    <div v-if="showGlobalPanel" class="global-summary-overlay" @click.self="showGlobalPanel = false">
+      <div class="global-summary-panel">
+        <div class="gs-header">
+          <h4>🌐 总结全部聊天</h4>
+          <button class="gs-close" @click="showGlobalPanel = false">&times;</button>
+        </div>
+        <div class="gs-options">
+          <label>时间范围：</label>
+          <select v-model="globalHours">
+            <option :value="6">最近 6 小时</option>
+            <option :value="12">最近 12 小时</option>
+            <option :value="24">最近 24 小时</option>
+            <option :value="72">最近 3 天</option>
+            <option :value="168">最近 7 天</option>
+          </select>
+          <input v-model="globalCustomMsg" class="gs-custom-input" placeholder="自定义问题（可选）..." />
+        </div>
+        <div class="gs-actions">
+          <button class="gs-run-btn" :disabled="globalLoading" @click="runGlobalSummary">
+            {{ globalLoading ? '分析中...' : '开始总结' }}
+          </button>
+        </div>
+        <div v-if="globalResult" class="gs-result" v-html="renderContent(globalResult)"></div>
+        <div v-if="globalLoading && !globalResult" class="gs-loading">
+          <div class="streaming-indicator"><span></span><span></span><span></span></div>
+          <span>正在读取并分析所有聊天记录...</span>
+        </div>
+      </div>
     </div>
 
     <!-- Messages -->
@@ -105,6 +137,7 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
 import { useAIChat } from '../composables/useAIChat'
+import { globalSummaryStream } from '../api'
 import { marked } from 'marked'
 
 const props = defineProps<{
@@ -117,6 +150,13 @@ defineEmits<{ 'send-reply': [text: string] }>()
 const aiChat = useAIChat()
 const inputText = ref('')
 const aiMessagesRef = ref<HTMLElement | null>(null)
+
+// Global summary state
+const showGlobalPanel = ref(false)
+const globalHours = ref(24)
+const globalCustomMsg = ref('')
+const globalLoading = ref(false)
+const globalResult = ref('')
 
 function renderContent(content: string) {
   try { return marked.parse(content, { breaks: true }) } catch { return content }
@@ -150,6 +190,26 @@ function scrollToBottom() {
 
 function onNewChat() {
   aiChat.startNewSession()
+}
+
+async function runGlobalSummary() {
+  if (globalLoading.value) return
+  globalLoading.value = true
+  globalResult.value = ''
+  try {
+    const stream = globalSummaryStream({
+      hours: globalHours.value,
+      message: globalCustomMsg.value || undefined,
+    })
+    for await (const data of stream) {
+      if (data.chunk) globalResult.value += data.chunk
+      if (data.error) globalResult.value += `\n\nError: ${data.error}`
+    }
+  } catch (err: any) {
+    globalResult.value = `Error: ${err.message}`
+  } finally {
+    globalLoading.value = false
+  }
 }
 
 function onSwitchSession(sid: string) {

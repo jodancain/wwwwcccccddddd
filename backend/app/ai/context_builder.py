@@ -29,6 +29,88 @@ SUGGEST_REPLY_PROMPT = """根据以下微信对话内容，生成3条合适的�
 4. 不要加额外解释"""
 
 
+GLOBAL_SUMMARY_SYSTEM_PROMPT = """你是一个智能微信助手，可以读取用户所有微信对话的消息记录。
+
+用户请你总结所有聊天内容。请按以下格式输出：
+
+## 总览
+简要概述这段时间的聊天活动情况（活跃对话数、主要话题等）
+
+## 重要对话
+按重要程度列出值得关注的对话，每个对话包含：
+- 联系人/群名
+- 讨论的主要内容
+- 是否需要回复或跟进
+
+## 待办事项
+提取所有需要用户采取行动的事项
+
+## 关键信息
+提取重要的时间、地点、数字、链接等关键信息
+
+注意：用中文输出，简洁明了，突出重点。"""
+
+
+def build_global_context(messages: list[dict], max_chars: int = 50000) -> str:
+    """Build context from messages across ALL conversations, grouped by talker."""
+    if not messages:
+        return "没有最近的聊天记录。"
+
+    # Group by talker
+    groups: dict[str, list[dict]] = {}
+    talker_names: dict[str, str] = {}
+    for msg in messages:
+        talker = msg.get("talker", "")
+        if talker not in groups:
+            groups[talker] = []
+            talker_names[talker] = msg.get("remark") or msg.get("nickname") or talker
+        groups[talker].append(msg)
+
+    # Sort groups by last message time (most recent first)
+    sorted_talkers = sorted(groups.keys(), key=lambda t: groups[t][-1].get("create_time", 0), reverse=True)
+
+    parts = []
+    total_msgs = sum(len(g) for g in groups.values())
+    parts.append(f"以下是最近的所有微信聊天记录（共 {len(groups)} 个对话，{total_msgs} 条消息）\n")
+
+    char_count = 0
+    for talker in sorted_talkers:
+        msgs = groups[talker]
+        name = talker_names[talker]
+        is_group = bool(msgs[0].get("is_group", 0))
+        chat_type = "群聊" if is_group else "私聊"
+
+        section = f"\n===== {name} ({chat_type}, {len(msgs)}条消息) =====\n"
+        lines = []
+        for msg in msgs[-50:]:  # Max 50 messages per conversation in global view
+            ts = msg.get("create_time", 0)
+            time_str = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else ""
+            content = msg.get("content", "")
+            if not content:
+                continue
+            is_sender = msg.get("is_sender", 0)
+            if is_sender:
+                direction = "[我]"
+            elif is_group and msg.get("sender"):
+                direction = f"[{msg['sender']}]"
+            else:
+                direction = f"[{name}]"
+            lines.append(f"  {time_str} {direction} {content}")
+
+        section += "\n".join(lines)
+
+        if char_count + len(section) > max_chars:
+            # Truncate: show summary only
+            parts.append(f"\n===== {name} ({chat_type}, {len(msgs)}条消息) =====")
+            parts.append(f"  (内容过多已省略，最后一条: {msgs[-1].get('content', '')[:50]})")
+            continue
+
+        parts.append(section)
+        char_count += len(section)
+
+    return "\n".join(parts)
+
+
 def build_conversation_context(messages: list[dict], talker_name: str = "",
                                 is_group: bool = False, max_chars: int = 30000) -> str:
     """Build conversation context from all messages.

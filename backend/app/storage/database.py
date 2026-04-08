@@ -190,6 +190,23 @@ class AppDatabase:
         )
         return [dict(r) for r in reversed(rows)]
 
+    async def get_all_recent_messages(self, hours: int = 24, limit: int = 5000) -> list[dict]:
+        """Load recent messages across ALL conversations within the last N hours."""
+        import time
+        since_ts = int(time.time()) - hours * 3600
+        rows = await self._db.execute_fetchall(
+            """SELECT m.talker, m.sender, m.type, m.type_name, m.is_sender,
+                      m.content, m.create_time, m.create_date, m.is_group,
+                      c.nickname, c.remark
+               FROM messages m
+               LEFT JOIN contacts c ON m.talker = c.username
+               WHERE m.create_time > ?
+               ORDER BY m.create_time ASC
+               LIMIT ?""",
+            (since_ts, limit),
+        )
+        return [dict(r) for r in rows]
+
     # --- Timeline ---
 
     async def get_message_dates(self, talker: str) -> list[dict]:

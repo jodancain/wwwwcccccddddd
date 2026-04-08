@@ -12,7 +12,9 @@ from app.ai.openai_provider import OpenAIProvider
 from app.ai.context_builder import (
     SYSTEM_PROMPT,
     SUGGEST_REPLY_PROMPT,
+    GLOBAL_SUMMARY_SYSTEM_PROMPT,
     build_conversation_context,
+    build_global_context,
 )
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -158,6 +160,54 @@ async def suggest_replies(req: SuggestRequest):
         logger.error(f"Suggest replies error: {e}")
 
     return {"replies": ["好的", "收到，谢谢", "我知道了"]}
+
+
+class GlobalSummaryRequest(BaseModel):
+    hours: int = 24  # Summarize last N hours
+    message: str = ""  # Optional custom question
+
+
+@router.post("/global-summary/stream")
+async def global_summary_stream(req: GlobalSummaryRequest):
+    """Summarize ALL recent chats across all conversations."""
+    db = await get_db()
+    provider = get_ai_provider()
+
+    # Load all recent messages
+    all_messages = await db.get_all_recent_messages(hours=req.hours, limit=8000)
+
+    if not all_messages:
+        async def empty():
+            yield f"data: {json.dumps({'chunk': '最近没有聊天记录。', 'session_id': ''}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
+        return StreamingResponse(empty(), media_type="text/event-stream")
+
+    context = build_global_context(all_messages)
+
+    # Create a session for this global summary
+    session_id = await db.create_ai_session(talker="__global__", title=f"全部聊天总结 ({req.hours}h)")
+
+    user_msg = req.message or f"请总结我最近 {req.hours} 小时内所有微信聊天的内容。"
+    ai_messages = [
+        {"role": "user", "content": f"{context}\n\n{user_msg}"},
+    ]
+
+    async def generate():
+        full_response = ""
+        try:
+            async for chunk in provider.chat_stream(ai_messages, system_prompt=GLOBAL_SUMMARY_SYSTEM_PROMPT):
+                full_response += chunk
+                yield f"data: {json.dumps({'chunk': chunk, 'session_id': session_id}, ensure_ascii=False)}\n\n"
+
+            await db.save_ai_message(session_id, "user", user_msg)
+            await db.save_ai_message(session_id, "assistant", full_response)
+
+            yield f"data: {json.dumps({'done': True, 'session_id': session_id}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logger.error(f"Global summary error: {e}")
+            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @router.get("/sessions")
