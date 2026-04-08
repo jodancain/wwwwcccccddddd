@@ -38,6 +38,7 @@
       <button class="quick-action-btn" @click="quickAction('分析对方的语气和意图')">🎯 分析语气</button>
       <button class="quick-action-btn" @click="fetchSuggestions">⚡ 快速回复</button>
       <button class="quick-action-btn global-summary-btn" @click="showGlobalPanel = true">🌐 总结全部聊天</button>
+      <button class="quick-action-btn training-btn" @click="openTrainingPanel">🧠 训练我的分身</button>
       <button v-if="currentTalker" class="quick-action-btn skill-gen-btn" @click="startGenerateSkill">🎭 生成人物画像</button>
     </div>
 
@@ -133,6 +134,68 @@
       </div>
     </div>
 
+    <!-- Training Panel -->
+    <div v-if="showTrainingPanel" class="global-summary-overlay" @click.self="showTrainingPanel = false">
+      <div class="global-summary-panel training-panel">
+        <div class="gs-header">
+          <h4>🧠 训练我的分身</h4>
+          <button class="gs-close" @click="showTrainingPanel = false">&times;</button>
+        </div>
+
+        <!-- Stats -->
+        <div class="training-stats" v-if="trainingStats">
+          <div class="stat-row"><span>我的文本消息</span><strong>{{ trainingStats.my_text_messages?.toLocaleString() }}</strong></div>
+          <div class="stat-row"><span>对话数</span><strong>{{ trainingStats.conversation_count }}</strong></div>
+          <div class="stat-row"><span>训练数据</span><strong>{{ trainingStats.already_exported ? `已导出 (${trainingStats.file_size_mb}MB)` : '未导出' }}</strong></div>
+        </div>
+
+        <!-- Progress -->
+        <div v-if="trainingStatus && trainingStatus.stage !== 'idle'" class="training-progress">
+          <div class="training-stage">
+            <span class="stage-icon" :class="trainingStatus.stage">
+              {{ stageIcon(trainingStatus.stage) }}
+            </span>
+            <span class="stage-label">{{ stageLabel(trainingStatus.stage) }}</span>
+          </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" :style="{ width: trainingStatus.progress + '%' }"></div>
+          </div>
+          <div class="progress-text">{{ trainingStatus.message }}</div>
+          <div v-if="trainingStatus.error" class="progress-error">{{ trainingStatus.error }}</div>
+        </div>
+
+        <!-- Actions -->
+        <div class="training-actions">
+          <template v-if="!trainingStatus || trainingStatus.stage === 'idle' || trainingStatus.stage === 'failed' || trainingStatus.stage === 'done'">
+            <button class="gs-run-btn training-start-btn" @click="doStartTraining">
+              🚀 一键训练（自动导出→训练→部署）
+            </button>
+            <div class="training-hint">
+              将自动：导出聊天数据 → 下载基座模型 → LoRA微调 → 部署API<br>
+              需要 GPU (16GB+ VRAM) 和约 1-3 小时
+            </div>
+          </template>
+          <template v-else-if="trainingStatus.stage === 'done'">
+            <div class="training-done">
+              <div class="done-icon">🎉</div>
+              <div>分身模型已部署!</div>
+              <div class="done-url">API: {{ trainingStatus.inference_url }}</div>
+            </div>
+          </template>
+          <template v-else>
+            <button class="gs-run-btn" style="background:#f38ba8;" @click="doStopTraining">⏹ 停止训练</button>
+          </template>
+        </div>
+
+        <!-- If model is running -->
+        <div v-if="trainingStatus?.inference_running" class="inference-status">
+          <div class="inference-badge">🟢 分身模型运行中</div>
+          <div class="inference-url">{{ trainingStatus.inference_url }}</div>
+          <button class="skill-btn activate" @click="useMyModel">切换为我的分身模式</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Messages -->
     <div ref="aiMessagesRef" class="ai-messages">
       <!-- Welcome -->
@@ -203,7 +266,7 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted } from 'vue'
 import { useAIChat } from '../composables/useAIChat'
-import { globalSummaryStream, listSkills, importSkill, deleteSkill as apiDeleteSkill, generateSkillStream } from '../api'
+import { globalSummaryStream, listSkills, importSkill, deleteSkill as apiDeleteSkill, generateSkillStream, getTrainingStats, getTrainingStatus, startTraining, stopTraining } from '../api'
 import { marked } from 'marked'
 
 const props = defineProps<{
@@ -233,6 +296,12 @@ const skillImporting = ref(false)
 const skillGenerating = ref(false)
 const skillGenResult = ref('')
 const skillGenTargetName = ref('')
+
+// Training
+const showTrainingPanel = ref(false)
+const trainingStats = ref<any>(null)
+const trainingStatus = ref<any>(null)
+let trainingPollTimer: any = null
 
 function renderContent(content: string) {
   try { return marked.parse(content, { breaks: true }) } catch { return content }
@@ -344,6 +413,66 @@ async function startGenerateSkill() {
     }
   } catch (err: any) { skillGenResult.value = `Error: ${err.message}` }
   finally { skillGenerating.value = false }
+}
+
+// === Training functions ===
+async function openTrainingPanel() {
+  showTrainingPanel.value = true
+  try { trainingStats.value = await getTrainingStats() } catch {}
+  try { trainingStatus.value = await getTrainingStatus() } catch {}
+  startPollingTraining()
+}
+
+function startPollingTraining() {
+  stopPollingTraining()
+  trainingPollTimer = setInterval(async () => {
+    try {
+      trainingStatus.value = await getTrainingStatus()
+      if (trainingStatus.value?.stage === 'done' || trainingStatus.value?.stage === 'idle' || trainingStatus.value?.stage === 'failed') {
+        stopPollingTraining()
+      }
+    } catch {}
+  }, 3000)
+}
+
+function stopPollingTraining() {
+  if (trainingPollTimer) { clearInterval(trainingPollTimer); trainingPollTimer = null }
+}
+
+async function doStartTraining() {
+  try {
+    await startTraining()
+    trainingStatus.value = await getTrainingStatus()
+    startPollingTraining()
+  } catch (err: any) { alert('启动失败: ' + err.message) }
+}
+
+async function doStopTraining() {
+  try { await stopTraining(); trainingStatus.value = await getTrainingStatus() } catch {}
+}
+
+function useMyModel() {
+  // Switch AI to use the personal model
+  if (trainingStatus.value?.inference_url) {
+    alert(`分身模型已激活!\n\n请在 .env 中设置:\nAI_PROVIDER=openai\nOPENAI_BASE_URL=${trainingStatus.value.inference_url}\nOPENAI_MODEL=my-style\n\n然后重启后端即可使用分身模式。`)
+  }
+  showTrainingPanel.value = false
+}
+
+function stageIcon(stage: string) {
+  const icons: Record<string, string> = {
+    exporting: '📦', downloading: '⬇️', training: '🔥',
+    merging: '🔗', starting_server: '🚀', done: '✅', failed: '❌',
+  }
+  return icons[stage] || '⏳'
+}
+
+function stageLabel(stage: string) {
+  const labels: Record<string, string> = {
+    exporting: '导出数据', downloading: '下载模型', training: '训练中',
+    merging: '合并模型', starting_server: '启动服务', done: '完成', failed: '失败',
+  }
+  return labels[stage] || stage
 }
 
 onMounted(() => { loadSkills() })

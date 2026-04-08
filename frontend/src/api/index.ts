@@ -34,6 +34,13 @@ export const createChatApi = (talker: string, name = '') =>
 export const deleteChatApi = (id: string) => api.delete(`/chat-apis/${id}`).then(r => r.data)
 export const toggleChatApi = (id: string) => api.post(`/chat-apis/${id}/toggle`).then(r => r.data)
 
+// Training
+export const getTrainingStats = () => api.get('/training/stats').then(r => r.data)
+export const getTrainingStatus = () => api.get('/training/status').then(r => r.data)
+export const startTraining = () => api.post('/training/start').then(r => r.data)
+export const stopTraining = () => api.post('/training/stop').then(r => r.data)
+export const exportTrainingData = () => api.post('/training/export-data').then(r => r.data)
+
 // Skills
 export const listSkills = () => api.get('/skills/').then(r => r.data)
 export const getSkill = (slug: string) => api.get(`/skills/${slug}`).then(r => r.data)
