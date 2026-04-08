@@ -264,22 +264,33 @@ html, body, #app { height: 100%; width: 100%; overflow: hidden;
 .skill-gen-btn { background: #2d1f5e; border-color: #7c5cbf; color: #cba6f7; }
 .skill-gen-btn:hover { background: #7c5cbf; }
 
-.skill-panel { max-height: 90vh; }
-.skill-list { flex: 1; overflow-y: auto; padding: 12px 20px; min-height: 80px; max-height: 300px; }
-.skill-empty { text-align: center; color: #6c7086; font-size: 13px; padding: 20px 0; }
-.skill-card { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: #313244; border: 1px solid #45475a; border-radius: 8px; margin-bottom: 8px; }
+.skill-panel { max-height: 85vh; width: 650px; }
+.skill-list { overflow-y: auto; padding: 12px 20px; max-height: 350px; }
+.skill-empty { text-align: center; color: #6c7086; font-size: 13px; padding: 30px 0; }
+.skill-card { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; background: #313244; border: 1px solid #45475a; border-radius: 8px; margin-bottom: 8px; transition: all 0.15s; }
+.skill-card:hover { border-color: #585b70; }
 .skill-card.active { border-color: #cba6f7; background: #2d1f5e; }
-.skill-card-info { flex: 1; min-width: 0; }
-.skill-card-name { font-size: 14px; font-weight: 500; color: #cdd6f4; }
-.skill-card-desc { font-size: 11px; color: #a6adc8; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.skill-card-actions { display: flex; gap: 4px; margin-left: 8px; }
-.skill-btn { padding: 4px 10px; font-size: 11px; border-radius: 4px; border: none; cursor: pointer; }
+.skill-card-info { flex: 1; min-width: 0; cursor: pointer; }
+.skill-card-name { font-size: 14px; font-weight: 600; color: #cdd6f4; }
+.skill-card-desc { font-size: 12px; color: #a6adc8; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-card-actions { display: flex; gap: 6px; margin-left: 12px; flex-shrink: 0; }
+.skill-btn { padding: 5px 12px; font-size: 12px; border-radius: 4px; border: none; cursor: pointer; font-weight: 500; transition: all 0.15s; }
 .skill-btn.activate { background: #cba6f7; color: #1e1e2e; }
+.skill-btn.activate:hover { background: #b48ef5; }
 .skill-btn.deactivate { background: #45475a; color: #cdd6f4; }
 .skill-btn.delete { background: #45475a; color: #f38ba8; }
 .skill-btn.delete:hover { background: #f38ba8; color: #1e1e2e; }
 .skill-generate-section { padding: 12px 20px; border-top: 1px solid #313244; }
-.skill-generate-title { font-size: 12px; color: #a6adc8; margin-bottom: 8px; }
+.skill-gen-full-btn { width: 100%; background: #7c5cbf; }
+.skill-gen-full-btn:hover { background: #9b7ed8; }
+
+/* Skill generation view */
+.skill-gen-header { padding: 12px 20px; background: #181825; border-bottom: 1px solid #313244; display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: #cba6f7; }
+.skill-gen-back { background: none; border: none; color: #89b4fa; cursor: pointer; font-size: 12px; }
+.skill-gen-back:hover { text-decoration: underline; }
+.skill-gen-result { flex: 1; overflow-y: auto; min-height: 200px; max-height: 60vh; }
+.skill-gen-result hr { border: none; border-top: 1px solid #313244; margin: 12px 0; }
+.skill-gen-result blockquote { border-left: 3px solid #cba6f7; padding-left: 12px; color: #a6adc8; font-style: italic; margin: 8px 0; }
 
 .quick-replies { padding: 8px 16px; border-top: 1px solid #313244; }
 .quick-replies-title { font-size: 11px; color: #a6adc8; margin-bottom: 6px; }

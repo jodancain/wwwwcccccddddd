@@ -4,13 +4,13 @@
     <div class="ai-panel-header">
       <h3>AI 助手</h3>
       <div class="ai-header-right">
-        <span v-if="activeSkill" class="ai-skill-badge" @click="showSkillPanel = true" :title="'Skill: ' + activeSkill.name">
-          🎭 {{ activeSkill.name }}
+        <span v-if="activeSkill" class="ai-skill-badge" @click="showSkillPanel = true" :title="'Skill: ' + (activeSkill.name || activeSkill.slug)">
+          🎭 {{ activeSkill.name || activeSkill.slug }}
         </span>
         <span v-if="currentTalker" class="ai-context-badge" :title="currentTalkerName">
           📎 {{ currentTalkerName }}
         </span>
-        <button class="ai-skill-btn" @click="showSkillPanel = true" title="管理 Skills">🧩</button>
+        <button class="ai-skill-btn" @click="openSkillPanel" title="管理 Skills">🧩</button>
         <button class="ai-new-chat-btn" @click="onNewChat" title="新对话">＋</button>
       </div>
     </div>
@@ -38,7 +38,7 @@
       <button class="quick-action-btn" @click="quickAction('分析对方的语气和意图')">🎯 分析语气</button>
       <button class="quick-action-btn" @click="fetchSuggestions">⚡ 快速回复</button>
       <button class="quick-action-btn global-summary-btn" @click="showGlobalPanel = true">🌐 总结全部聊天</button>
-      <button v-if="currentTalker" class="quick-action-btn skill-gen-btn" @click="generateSkillForCurrentTalker">🎭 生成人物画像</button>
+      <button v-if="currentTalker" class="quick-action-btn skill-gen-btn" @click="startGenerateSkill">🎭 生成人物画像</button>
     </div>
 
     <!-- Global Summary Panel -->
@@ -73,45 +73,63 @@
     </div>
 
     <!-- Skill Management Panel -->
-    <div v-if="showSkillPanel" class="global-summary-overlay" @click.self="showSkillPanel = false">
+    <div v-if="showSkillPanel" class="global-summary-overlay" @click.self="closeSkillPanel">
       <div class="global-summary-panel skill-panel">
         <div class="gs-header">
           <h4>🧩 人物 Skills 管理</h4>
-          <button class="gs-close" @click="showSkillPanel = false">&times;</button>
+          <button class="gs-close" @click="closeSkillPanel">&times;</button>
         </div>
 
-        <!-- Import -->
-        <div class="gs-options">
-          <input v-model="importUrl" class="gs-custom-input" placeholder="GitHub URL 导入 (如 https://github.com/user/skill-repo)..." />
-          <button class="gs-run-btn" style="padding:6px 14px;font-size:12px;" :disabled="!importUrl.trim() || skillImporting" @click="doImportSkill">
-            {{ skillImporting ? '导入中...' : '导入' }}
-          </button>
-        </div>
+        <!-- Skill Generation View -->
+        <template v-if="skillGenerating || skillGenResult">
+          <div class="skill-gen-header">
+            <span>🎭 正在为「{{ skillGenTargetName }}」生成人物画像</span>
+            <button v-if="!skillGenerating" class="skill-gen-back" @click="skillGenResult = ''">← 返回列表</button>
+          </div>
+          <div class="gs-result skill-gen-result" v-if="skillGenResult" v-html="renderContent(skillGenResult)"></div>
+          <div v-if="skillGenerating && !skillGenResult" class="gs-loading">
+            <div class="streaming-indicator"><span></span><span></span><span></span></div>
+            <span>正在分析聊天记录，生成6层人物画像...</span>
+          </div>
+        </template>
 
-        <!-- Skill list -->
-        <div class="skill-list">
-          <div v-if="skills.length === 0" class="skill-empty">暂无 Skills，可导入或从聊天生成</div>
-          <div v-for="s in skills" :key="s.slug" class="skill-card" :class="{ active: activeSkill?.slug === s.slug }">
-            <div class="skill-card-info">
-              <div class="skill-card-name">🎭 {{ s.name || s.slug }}</div>
-              <div class="skill-card-desc">{{ s.description || '' }}</div>
+        <!-- Normal View: Import + List -->
+        <template v-else>
+          <!-- Import -->
+          <div class="gs-options">
+            <input v-model="importUrl" class="gs-custom-input" placeholder="GitHub URL (如 https://github.com/user/skill-repo)" @keydown.enter="doImportSkill" />
+            <button class="gs-run-btn" style="padding:6px 14px;font-size:12px;" :disabled="!importUrl.trim() || skillImporting" @click="doImportSkill">
+              {{ skillImporting ? '...' : '导入' }}
+            </button>
+          </div>
+
+          <!-- Skill list -->
+          <div class="skill-list">
+            <div v-if="skills.length === 0" class="skill-empty">
+              <div style="font-size: 32px; margin-bottom: 8px;">🎭</div>
+              <div>暂无 Skills</div>
+              <div style="font-size: 11px; color: #6c7086; margin-top: 4px;">从 GitHub 导入或从聊天记录生成</div>
             </div>
-            <div class="skill-card-actions">
-              <button v-if="activeSkill?.slug !== s.slug" class="skill-btn activate" @click="activateSkill(s)">激活</button>
-              <button v-else class="skill-btn deactivate" @click="deactivateSkill()">取消</button>
-              <button class="skill-btn delete" @click="doDeleteSkill(s.slug)">删除</button>
+            <div v-for="s in skills" :key="s.slug" class="skill-card" :class="{ active: activeSkill?.slug === s.slug }">
+              <div class="skill-card-info" @click="toggleSkillPreview(s.slug)">
+                <div class="skill-card-name">🎭 {{ s.name || s.slug }}</div>
+                <div class="skill-card-desc">{{ s.description || '人物画像' }}</div>
+              </div>
+              <div class="skill-card-actions">
+                <button v-if="activeSkill?.slug !== s.slug" class="skill-btn activate" @click="activateSkill(s)">激活</button>
+                <button v-else class="skill-btn deactivate" @click="deactivateSkill()">取消激活</button>
+                <button class="skill-btn delete" @click="doDeleteSkill(s.slug)">删除</button>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- Generate from current chat -->
-        <div v-if="currentTalker" class="skill-generate-section">
-          <div class="skill-generate-title">从当前对话生成</div>
-          <button class="gs-run-btn" :disabled="skillGenerating" @click="generateSkillForCurrentTalker" style="width:100%;">
-            {{ skillGenerating ? '正在分析聊天记录...' : `为「${currentTalkerName}」生成人物画像` }}
-          </button>
-          <div v-if="skillGenResult" class="gs-result" v-html="renderContent(skillGenResult)"></div>
-        </div>
+          <!-- Generate from current chat -->
+          <div v-if="currentTalker" class="skill-generate-section">
+            <button class="gs-run-btn skill-gen-full-btn" @click="startGenerateSkill">
+              🎭 为「{{ currentTalkerName }}」生成人物画像
+            </button>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -199,14 +217,14 @@ const aiChat = useAIChat()
 const inputText = ref('')
 const aiMessagesRef = ref<HTMLElement | null>(null)
 
-// Global summary state
+// Global summary
 const showGlobalPanel = ref(false)
 const globalHours = ref(24)
 const globalCustomMsg = ref('')
 const globalLoading = ref(false)
 const globalResult = ref('')
 
-// Skills state
+// Skills
 const showSkillPanel = ref(false)
 const skills = ref<any[]>([])
 const activeSkill = ref<any>(null)
@@ -214,6 +232,7 @@ const importUrl = ref('')
 const skillImporting = ref(false)
 const skillGenerating = ref(false)
 const skillGenResult = ref('')
+const skillGenTargetName = ref('')
 
 function renderContent(content: string) {
   try { return marked.parse(content, { breaks: true }) } catch { return content }
@@ -229,7 +248,7 @@ function handleSend() {
 
 function quickAction(prompt: string) {
   if (aiChat.loading.value) return
-  aiChat.sendMessage(prompt, props.currentTalker)
+  aiChat.sendMessage(prompt, props.currentTalker, activeSkill.value?.slug || '')
   scrollToBottom()
 }
 
@@ -245,28 +264,21 @@ function scrollToBottom() {
   })
 }
 
-function onNewChat() {
-  aiChat.startNewSession()
-}
+function onNewChat() { aiChat.startNewSession() }
 
+// === Global Summary ===
 async function runGlobalSummary() {
   if (globalLoading.value) return
   globalLoading.value = true
   globalResult.value = ''
   try {
-    const stream = globalSummaryStream({
-      hours: globalHours.value,
-      message: globalCustomMsg.value || undefined,
-    })
+    const stream = globalSummaryStream({ hours: globalHours.value, message: globalCustomMsg.value || undefined })
     for await (const data of stream) {
       if (data.chunk) globalResult.value += data.chunk
       if (data.error) globalResult.value += `\n\nError: ${data.error}`
     }
-  } catch (err: any) {
-    globalResult.value = `Error: ${err.message}`
-  } finally {
-    globalLoading.value = false
-  }
+  } catch (err: any) { globalResult.value = `Error: ${err.message}` }
+  finally { globalLoading.value = false }
 }
 
 // === Skill functions ===
@@ -274,13 +286,26 @@ async function loadSkills() {
   try { skills.value = await listSkills() } catch { skills.value = [] }
 }
 
+function openSkillPanel() {
+  skillGenResult.value = ''
+  showSkillPanel.value = true
+  loadSkills()
+}
+
+function closeSkillPanel() {
+  showSkillPanel.value = false
+  skillGenResult.value = ''
+}
+
 function activateSkill(skill: any) {
   activeSkill.value = skill
   showSkillPanel.value = false
 }
 
-function deactivateSkill() {
-  activeSkill.value = null
+function deactivateSkill() { activeSkill.value = null }
+
+function toggleSkillPreview(slug: string) {
+  // Could preview skill content in future
 }
 
 async function doImportSkill() {
@@ -304,8 +329,9 @@ async function doDeleteSkill(slug: string) {
   } catch {}
 }
 
-async function generateSkillForCurrentTalker() {
+async function startGenerateSkill() {
   if (!props.currentTalker || skillGenerating.value) return
+  skillGenTargetName.value = props.currentTalkerName
   skillGenerating.value = true
   skillGenResult.value = ''
   showSkillPanel.value = true
@@ -333,20 +359,11 @@ function formatSessionTime(dt: string) {
   return `${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
-// Watch for conversation changes - load history instead of clearing
-watch(
-  () => props.currentTalker,
-  (talker) => {
-    if (talker) {
-      aiChat.switchToTalker(talker)
-      nextTick(scrollToBottom)
-    }
-  }
-)
+// Watch for conversation changes
+watch(() => props.currentTalker, (talker) => {
+  if (talker) { aiChat.switchToTalker(talker); nextTick(scrollToBottom) }
+})
 
 // Auto-scroll on new messages
-watch(
-  () => [aiChat.messages.value.length, aiChat.streamingContent.value],
-  () => scrollToBottom()
-)
+watch(() => [aiChat.messages.value.length, aiChat.streamingContent.value], () => scrollToBottom())
 </script>
