@@ -38,7 +38,7 @@ class GeminiProvider(AIProvider):
             "contents": contents,
             "generationConfig": {
                 "temperature": 0.7,
-                "maxOutputTokens": 4096,
+                "maxOutputTokens": 65536,
             },
         }
         if system_instruction:
@@ -46,7 +46,7 @@ class GeminiProvider(AIProvider):
 
         url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=300) as client:
             resp = await client.post(url, json=body)
             resp.raise_for_status()
             data = resp.json()
@@ -64,7 +64,7 @@ class GeminiProvider(AIProvider):
             "contents": contents,
             "generationConfig": {
                 "temperature": 0.7,
-                "maxOutputTokens": 4096,
+                "maxOutputTokens": 65536,
             },
         }
         if system_instruction:
@@ -72,7 +72,7 @@ class GeminiProvider(AIProvider):
 
         url = f"{self.base_url}/models/{self.model}:streamGenerateContent?alt=sse&key={self.api_key}"
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=600) as client:
             async with client.stream("POST", url, json=body) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():

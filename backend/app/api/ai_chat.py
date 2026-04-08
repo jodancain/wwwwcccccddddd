@@ -174,7 +174,7 @@ async def global_summary_stream(req: GlobalSummaryRequest):
     provider = get_ai_provider()
 
     # Load all recent messages
-    all_messages = await db.get_all_recent_messages(hours=req.hours, limit=8000)
+    all_messages = await db.get_all_recent_messages(hours=req.hours, limit=50000)
 
     if not all_messages:
         async def empty():

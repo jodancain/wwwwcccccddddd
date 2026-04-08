@@ -175,7 +175,7 @@ class AppDatabase:
         )
         return [dict(r) for r in reversed(rows)]
 
-    async def get_all_messages_for_talker(self, talker: str, max_messages: int = 2000) -> list[dict]:
+    async def get_all_messages_for_talker(self, talker: str, max_messages: int = 50000) -> list[dict]:
         """Load messages for a talker (up to max_messages most recent), ordered chronologically."""
         rows = await self._db.execute_fetchall(
             """SELECT m.talker, m.sender, m.type, m.type_name, m.is_sender,

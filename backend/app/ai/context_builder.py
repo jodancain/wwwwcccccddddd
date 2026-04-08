@@ -51,7 +51,7 @@ GLOBAL_SUMMARY_SYSTEM_PROMPT = """你是一个智能微信助手，可以读取�
 注意：用中文输出，简洁明了，突出重点。"""
 
 
-def build_global_context(messages: list[dict], max_chars: int = 50000) -> str:
+def build_global_context(messages: list[dict], max_chars: int = 500000) -> str:
     """Build context from messages across ALL conversations, grouped by talker."""
     if not messages:
         return "没有最近的聊天记录。"
@@ -82,7 +82,7 @@ def build_global_context(messages: list[dict], max_chars: int = 50000) -> str:
 
         section = f"\n===== {name} ({chat_type}, {len(msgs)}条消息) =====\n"
         lines = []
-        for msg in msgs[-50:]:  # Max 50 messages per conversation in global view
+        for msg in msgs:  # Show all messages (Gemini 2.5 Pro has 1M context)
             ts = msg.get("create_time", 0)
             time_str = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else ""
             content = msg.get("content", "")
@@ -112,7 +112,7 @@ def build_global_context(messages: list[dict], max_chars: int = 50000) -> str:
 
 
 def build_conversation_context(messages: list[dict], talker_name: str = "",
-                                is_group: bool = False, max_chars: int = 30000) -> str:
+                                is_group: bool = False, max_chars: int = 500000) -> str:
     """Build conversation context from all messages.
 
     For large conversations, older messages are condensed (date + count summary)
