@@ -37,13 +37,23 @@ BASE_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 MODEL_SHORT = "Qwen2.5-3B-Instruct"
 
 
+def _make_env(extra=None):
+    """Create subprocess env with UTF-8 encoding to avoid charmap errors on Windows."""
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    if extra:
+        env.update(extra)
+    return env
+
+
 def _run_cmd(cmd: list[str], env=None, timeout=None) -> tuple[int, str]:
     """Run a command and return (returncode, combined stdout+stderr)."""
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        env=env or os.environ.copy(),
+        env=_make_env(env),
     )
     output, _ = proc.communicate(timeout=timeout)
     return proc.returncode, output.decode("utf-8", errors="ignore")
@@ -55,7 +65,7 @@ def _run_cmd_stream(cmd: list[str], env=None):
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        env=env or os.environ.copy(),
+        env=_make_env(env),
         bufsize=1,
     )
     for line in iter(proc.stdout.readline, b""):
@@ -273,15 +283,13 @@ class TrainingPipeline:
 
         wrapper = Path(__file__).parent / "train_wrapper.py"
         cmd = [sys.executable, str(wrapper), "train", str(config_file)]
-        env = os.environ.copy()
-        env["CUDA_VISIBLE_DEVICES"] = "0"
 
         logger.info(f"Training cmd: {' '.join(cmd)}")
 
         # Run in thread, poll for output
         def train_thread():
             results = []
-            for line in _run_cmd_stream(cmd, env=env):
+            for line in _run_cmd_stream(cmd, env={"CUDA_VISIBLE_DEVICES": "0"}):
                 results.append(line)
             return results
 
@@ -352,13 +360,10 @@ class TrainingPipeline:
             sys.executable, str(wrapper), "api",
             str(config_file),
         ]
-        env = os.environ.copy()
-        env["CUDA_VISIBLE_DEVICES"] = "0"
-        env["API_PORT"] = str(self.inference_port)
-
         logger.info(f"Starting inference: {' '.join(cmd)}")
         self.inference_process = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=_make_env({"CUDA_VISIBLE_DEVICES": "0", "API_PORT": str(self.inference_port)}),
         )
 
         # Wait for server
