@@ -22,3 +22,12 @@ async def get_sync_status():
 async def trigger_sync():
     await sync_engine.force_sync()
     return {"message": "Sync triggered"}
+
+
+@router.get("/realtime-status")
+async def realtime_status():
+    try:
+        from app.sync.realtime_listener import realtime_listener
+        return realtime_listener.get_status()
+    except Exception as e:
+        return {"running": False, "connected": False, "error": str(e)}

@@ -71,6 +71,12 @@ on('new_messages', () => {
   msgThreadRef.value?.refresh()
 })
 
+// Real-time update from wxauto (instant notification)
+on('realtime_update', (data: any) => {
+  convListRef.value?.refresh()
+  msgThreadRef.value?.refresh()
+})
+
 // Resize handle - drag to adjust AI panel width
 let isResizing = false
 function startResize(e: MouseEvent) {

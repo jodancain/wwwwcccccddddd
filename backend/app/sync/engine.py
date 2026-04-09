@@ -17,11 +17,20 @@ class SyncEngine:
         self.parser = WeChatMessageParser()
         self._running = False
         self._last_decrypt_time = 0
+        self._force_decrypt = False
         self.status = "idle"
 
     async def start(self):
         self._running = True
         logger.info("SyncEngine started")
+
+        # Start wxauto real-time listener
+        try:
+            from app.sync.realtime_listener import realtime_listener
+            await realtime_listener.start()
+            logger.info("Realtime listener started")
+        except Exception as e:
+            logger.warning(f"Realtime listener failed to start: {e}")
 
         # Initial decrypt
         await self._do_decrypt()
@@ -31,8 +40,25 @@ class SyncEngine:
             try:
                 now = time.time()
 
-                # Decrypt every DECRYPT_INTERVAL_SECONDS
-                if now - self._last_decrypt_time >= self.settings.DECRYPT_INTERVAL_SECONDS:
+                # Check if wxauto detected new messages → force immediate decrypt
+                try:
+                    from app.sync.realtime_listener import realtime_listener
+                    changes = realtime_listener.get_pending_changes()
+                    if changes:
+                        chat_names = [c["chat_name"] for c in changes]
+                        logger.info(f"wxauto detected new messages in: {chat_names}")
+                        self._force_decrypt = True
+                        # Broadcast immediate notification to frontend
+                        await ws_manager.broadcast("realtime_update", {
+                            "chats": chat_names,
+                            "timestamp": time.time(),
+                        })
+                except Exception:
+                    pass
+
+                # Decrypt: on schedule OR when wxauto triggers it
+                if self._force_decrypt or (now - self._last_decrypt_time >= self.settings.DECRYPT_INTERVAL_SECONDS):
+                    self._force_decrypt = False
                     await self._do_decrypt()
 
                 # Sync messages every cycle
@@ -47,6 +73,11 @@ class SyncEngine:
     def stop(self):
         self._running = False
         self.status = "stopped"
+        try:
+            from app.sync.realtime_listener import realtime_listener
+            realtime_listener.stop()
+        except:
+            pass
         logger.info("SyncEngine stopped")
 
     async def _do_decrypt(self):
@@ -57,7 +88,6 @@ class SyncEngine:
             logger.info(f"Decrypt done: {result}")
         except Exception as e:
             logger.error(f"Decrypt failed: {e}")
-            # Still update time so we don't spam retries
             self._last_decrypt_time = time.time()
         finally:
             self.status = "idle"
