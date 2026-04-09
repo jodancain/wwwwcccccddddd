@@ -1,12 +1,18 @@
 """Wrapper to run LLaMA-Factory with Python 3.14 compatibility patch.
 
-Python 3.14 changed pickle.Pickler._batch_setitems(items) → (items, obj)
-which breaks datasets.utils._dill.Pickler._batch_setitems(items).
-
 Usage: python train_wrapper.py train <config_file>
        python train_wrapper.py api <config_file>
 """
+import os
 import sys
+import io
+
+# ====== Fix Windows charmap encoding ======
+os.environ["PYTHONIOENCODING"] = "utf-8"
+os.environ["PYTHONUTF8"] = "1"
+# Force stdout/stderr to UTF-8
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # ====== PATCH: Fix Python 3.14 pickle._batch_setitems ======
 if sys.version_info >= (3, 14):
