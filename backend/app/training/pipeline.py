@@ -33,8 +33,9 @@ class PipelineStage(str, Enum):
     FAILED = "failed"
 
 
-BASE_MODEL = "Qwen/Qwen2.5-3B-Instruct"
-MODEL_SHORT = "Qwen2.5-3B-Instruct"
+# 1.5B model fits in RTX 3070 8GB without quantization
+BASE_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
+MODEL_SHORT = "Qwen2.5-1.5B-Instruct"
 
 
 def _make_env(extra=None):
@@ -230,95 +231,62 @@ class TrainingPipeline:
     # ==================== TRAINING ====================
 
     async def _run_training_async(self, model_path: str):
-        """Run QLoRA training, streaming progress."""
+        """Run LoRA training using direct transformers+peft script (not LLaMA-Factory)."""
         self.output_dir.mkdir(parents=True, exist_ok=True)
         lora_dir = self.output_dir / "lora"
         self.training_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write dataset_info.json for LLaMA-Factory
-        dataset_info = {
-            "my_wechat_style": {
-                "file_name": "my_wechat_style.json",
-                "formatting": "sharegpt",
-                "columns": {"messages": "conversations"},
-            }
-        }
-        (self.training_dir / "dataset_info.json").write_text(
-            json.dumps(dataset_info, indent=2), encoding="utf-8"
-        )
-
-        # Training config
+        # Training config for train_script.py
         config = {
-            "stage": "sft",
             "model_name_or_path": model_path,
-            "dataset": "my_wechat_style",
             "dataset_dir": str(self.training_dir).replace("\\", "/"),
-            "template": "qwen",
-            "finetuning_type": "lora",
+            "dataset_file": "my_wechat_style.json",
+            "output_dir": str(lora_dir).replace("\\", "/"),
             "lora_rank": 8,
             "lora_alpha": 16,
-            "lora_target": "all",
-            "quantization_bit": 4,
-            "quantization_method": "bitsandbytes",
             "cutoff_len": 256,
             "per_device_train_batch_size": 1,
             "gradient_accumulation_steps": 8,
             "num_train_epochs": 3,
             "learning_rate": 2e-4,
-            "lr_scheduler_type": "cosine",
-            "warmup_ratio": 0.1,
-            "output_dir": str(lora_dir).replace("\\", "/"),
-            "fp16": True,
-            "logging_steps": 5,
-            "save_steps": 500,
-            "overwrite_output_dir": True,
-            "gradient_checkpointing": True,
-            "optim": "paged_adamw_8bit",
-            "max_grad_norm": 1.0,
-            "report_to": "none",
         }
 
         config_file = self.training_dir / "train_config.json"
         config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
-        wrapper = Path(__file__).parent / "train_wrapper.py"
-        cmd = [sys.executable, str(wrapper), "train", str(config_file)]
+        train_script = Path(__file__).parent / "train_script.py"
+        cmd = [sys.executable, "-u", str(train_script), str(config_file)]
 
         logger.info(f"Training cmd: {' '.join(cmd)}")
 
-        # Run in thread, poll for output
+        # Run in thread, capture output
         def train_thread():
             results = []
-            for line in _run_cmd_stream(cmd, env={"CUDA_VISIBLE_DEVICES": "0"}):
+            for line in _run_cmd_stream(cmd):
                 results.append(line)
             return results
 
         train_future = asyncio.get_event_loop().run_in_executor(None, train_thread)
 
-        # Poll the output directory for progress
+        # Poll for progress by checking output lines
+        last_check = 0
         while not train_future.done():
             await asyncio.sleep(5)
-            # Check for log files
-            log_file = lora_dir / "trainer_log.jsonl"
-            if log_file.exists():
-                try:
-                    lines = log_file.read_text(errors="ignore").strip().split("\n")
-                    if lines:
-                        last = json.loads(lines[-1])
-                        step = last.get("current_steps", 0)
-                        total = last.get("total_steps", 1)
-                        loss = last.get("loss", 0)
-                        pct = min(99, int(step / max(total, 1) * 100))
-                        await self._update(PipelineStage.TRAINING, pct,
-                            f"训练中 Step {step}/{total}, loss={loss:.3f}")
-                except:
-                    pass
+            # Check for checkpoint files
+            if lora_dir.exists():
+                has_adapter = any(lora_dir.glob("adapter_*"))
+                if has_adapter:
+                    await self._update(PipelineStage.TRAINING, 90, "训练接近完成...")
+            # Check train_stats.json (written at end)
+            stats_file = lora_dir / "train_stats.json"
+            if stats_file.exists():
+                break
             if self._cancel:
                 break
 
         output_lines = await train_future
 
-        # Check exit code
+        # Parse progress from output
         exit_code = 0
         for line in reversed(output_lines):
             if line.startswith("__EXIT_CODE__:"):
@@ -326,39 +294,35 @@ class TrainingPipeline:
                 break
 
         if exit_code != 0:
-            error_lines = [l for l in output_lines if "error" in l.lower() or "Error" in l]
-            error_msg = "\n".join(error_lines[-3:]) if error_lines else "未知错误"
+            error_lines = [l for l in output_lines if "error" in l.lower() or "Error" in l or "Traceback" in l]
+            error_msg = "\n".join(error_lines[-5:]) if error_lines else "\n".join(output_lines[-5:])
             raise RuntimeError(f"训练失败 (exit {exit_code}): {error_msg}")
 
         # Verify output
         if not any(lora_dir.glob("adapter_*")):
             raise RuntimeError(f"训练输出未找到: {lora_dir}")
 
-        await self._update(PipelineStage.TRAINING, 100, "训练完成!")
+        # Read final loss
+        stats_file = lora_dir / "train_stats.json"
+        if stats_file.exists():
+            stats = json.loads(stats_file.read_text())
+            loss = stats.get("loss", "?")
+            await self._update(PipelineStage.TRAINING, 100, f"训练完成! Loss: {loss:.4f}" if isinstance(loss, float) else "训练完成!")
+        else:
+            await self._update(PipelineStage.TRAINING, 100, "训练完成!")
 
     # ==================== INFERENCE ====================
 
     async def _start_inference_async(self, base_model_path: str):
-        """Start inference server."""
+        """Start OpenAI-compatible inference server."""
         lora_dir = self.output_dir / "lora"
 
-        # Config for LLaMA-Factory API
-        config = {
-            "model_name_or_path": base_model_path,
-            "adapter_name_or_path": str(lora_dir).replace("\\", "/"),
-            "template": "qwen",
-            "finetuning_type": "lora",
-            "quantization_bit": 4,
-            "quantization_method": "bitsandbytes",
-        }
-
-        config_file = self.training_dir / "inference_config.json"
-        config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
-
-        wrapper = Path(__file__).parent / "train_wrapper.py"
+        serve_script = Path(__file__).parent / "serve_model.py"
         cmd = [
-            sys.executable, str(wrapper), "api",
-            str(config_file),
+            sys.executable, str(serve_script),
+            "--model", base_model_path,
+            "--lora", str(lora_dir),
+            "--port", str(self.inference_port),
         ]
         logger.info(f"Starting inference: {' '.join(cmd)}")
         self.inference_process = subprocess.Popen(
