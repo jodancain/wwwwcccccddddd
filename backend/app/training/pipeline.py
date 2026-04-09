@@ -92,8 +92,17 @@ class TrainingPipeline:
         self.models_dir = Path("D:/WeChatAI_models")
         self.output_dir = self.models_dir / "output"
 
+    def _check_inference_alive(self) -> bool:
+        """Check if inference server is responding (works even after backend restart)."""
+        try:
+            import urllib.request
+            resp = urllib.request.urlopen(f"http://localhost:{self.inference_port}/v1/models", timeout=2)
+            return resp.status == 200
+        except:
+            return False
+
     def get_status(self) -> dict:
-        is_running = self.inference_process is not None and self.inference_process.poll() is None
+        is_running = self._check_inference_alive()
         return {
             "stage": self.stage.value,
             "progress": self.progress,

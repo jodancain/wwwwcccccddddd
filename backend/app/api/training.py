@@ -1,7 +1,9 @@
 """Training pipeline API routes."""
 import asyncio
 
+import httpx
 from fastapi import APIRouter
+from pydantic import BaseModel
 from loguru import logger
 
 from app.dependencies import get_db
@@ -9,6 +11,10 @@ from app.training.data_exporter import export_training_data, get_export_stats
 from app.training.pipeline import pipeline
 
 router = APIRouter(prefix="/training", tags=["training"])
+
+
+class MyModelReplyRequest(BaseModel):
+    talker: str
 
 
 @router.get("/stats")
@@ -63,3 +69,51 @@ async def stop_server():
     """Stop inference server."""
     await pipeline.stop_inference()
     return {"message": "Server stopped"}
+
+
+@router.post("/my-reply")
+async def my_model_reply(req: MyModelReplyRequest):
+    """Use the personal model to generate a reply for a conversation."""
+    if not pipeline._check_inference_alive():
+        return {"error": "分身模型未运行，请先训练并部署"}
+
+    db = await get_db()
+    # Get recent messages for context
+    recent = await db.get_recent_messages_for_talker(req.talker, limit=20)
+    if not recent:
+        return {"error": "没有找到对话记录"}
+
+    # Build chat messages for the model
+    messages = []
+    for msg in recent:
+        role = "assistant" if msg.get("is_sender") else "user"
+        content = msg.get("content", "")
+        if content and not content.startswith("["):
+            messages.append({"role": role, "content": content})
+
+    # Ensure last message is from "user" (the other person)
+    if not messages or messages[-1]["role"] != "user":
+        return {"error": "最后一条消息不是对方发的，无需回复"}
+
+    # Keep last 10 turns for context
+    messages = messages[-10:]
+
+    # Call personal model API
+    try:
+        api_url = f"http://localhost:{pipeline.inference_port}/v1/chat/completions"
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(api_url, json={
+                "model": "my-style",
+                "messages": messages,
+                "temperature": 0.8,
+                "max_tokens": 256,
+            })
+            resp.raise_for_status()
+            data = resp.json()
+            reply = data["choices"][0]["message"]["content"].strip()
+            # Clean up any special tokens
+            reply = reply.replace("<|im_end|>", "").replace("<|im_start|>", "").strip()
+            return {"reply": reply, "context_turns": len(messages)}
+    except Exception as e:
+        logger.error(f"My model reply error: {e}")
+        return {"error": f"分身模型调用失败: {str(e)}"}

@@ -228,6 +228,9 @@ html, body, #app { height: 100%; width: 100%; overflow: hidden;
 .quick-action-btn { padding: 6px 12px; background: #313244; color: var(--ai-accent); border: 1px solid #45475a; border-radius: 16px; font-size: 12px; cursor: pointer; transition: all 0.15s; }
 .quick-action-btn:hover { background: #45475a; border-color: var(--ai-accent); }
 .global-summary-btn { background: #1e3a5f; border-color: #2d6da8; color: #7ec8ff; }
+.clone-reply-btn { background: #1a4731; border-color: #2d8a56; color: #69db7c; font-weight: 600; }
+.clone-reply-btn:hover { background: #2d8a56; color: #fff; }
+.clone-reply-btn:disabled { opacity: 0.6; cursor: wait; }
 .global-summary-btn:hover { background: #2d6da8; }
 
 /* Global Summary Panel */

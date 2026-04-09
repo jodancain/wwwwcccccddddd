@@ -39,6 +39,7 @@
       <button class="quick-action-btn" @click="fetchSuggestions">⚡ 快速回复</button>
       <button class="quick-action-btn global-summary-btn" @click="showGlobalPanel = true">🌐 总结全部聊天</button>
       <button class="quick-action-btn training-btn" @click="openTrainingPanel">🧠 训练我的分身</button>
+      <button v-if="currentTalker && trainingStatus?.inference_running" class="quick-action-btn clone-reply-btn" :disabled="cloneReplying" @click="doCloneReply">🤖 {{ cloneReplying ? '思考中...' : '分身帮我回复' }}</button>
       <button v-if="currentTalker" class="quick-action-btn skill-gen-btn" @click="startGenerateSkill">🎭 生成人物画像</button>
     </div>
 
@@ -266,7 +267,7 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted } from 'vue'
 import { useAIChat } from '../composables/useAIChat'
-import { globalSummaryStream, listSkills, importSkill, deleteSkill as apiDeleteSkill, generateSkillStream, getTrainingStats, getTrainingStatus, startTraining, stopTraining } from '../api'
+import { globalSummaryStream, listSkills, importSkill, deleteSkill as apiDeleteSkill, generateSkillStream, getTrainingStats, getTrainingStatus, startTraining, stopTraining, myModelReply } from '../api'
 import { marked } from 'marked'
 
 const props = defineProps<{
@@ -302,6 +303,7 @@ const showTrainingPanel = ref(false)
 const trainingStats = ref<any>(null)
 const trainingStatus = ref<any>(null)
 let trainingPollTimer: any = null
+const cloneReplying = ref(false)
 
 function renderContent(content: string) {
   try { return marked.parse(content, { breaks: true }) } catch { return content }
@@ -452,11 +454,39 @@ async function doStopTraining() {
 }
 
 function useMyModel() {
-  // Switch AI to use the personal model
   if (trainingStatus.value?.inference_url) {
     alert(`分身模型已激活!\n\n请在 .env 中设置:\nAI_PROVIDER=openai\nOPENAI_BASE_URL=${trainingStatus.value.inference_url}\nOPENAI_MODEL=my-style\n\n然后重启后端即可使用分身模式。`)
   }
   showTrainingPanel.value = false
+}
+
+async function doCloneReply() {
+  if (!props.currentTalker || cloneReplying.value) return
+  cloneReplying.value = true
+  try {
+    const result = await myModelReply(props.currentTalker)
+    if (result.error) {
+      // Show error in AI chat
+      aiChat.messages.value.push({ role: 'assistant', content: `❌ ${result.error}`, timestamp: Date.now() })
+    } else if (result.reply) {
+      // Show the reply in AI chat and offer to send
+      aiChat.messages.value.push({
+        role: 'user', content: '🤖 分身帮我回复', timestamp: Date.now(),
+      })
+      aiChat.messages.value.push({
+        role: 'assistant',
+        content: `**🤖 分身生成的回复：**\n\n> ${result.reply}\n\n点击下方"发送"可将此回复发送到微信。`,
+        timestamp: Date.now(),
+      })
+      // Add to quick replies for easy sending
+      aiChat.quickReplies.value = [result.reply]
+    }
+    scrollToBottom()
+  } catch (err: any) {
+    aiChat.messages.value.push({ role: 'assistant', content: `❌ 调用失败: ${err.message}`, timestamp: Date.now() })
+  } finally {
+    cloneReplying.value = false
+  }
 }
 
 function stageIcon(stage: string) {
@@ -475,7 +505,11 @@ function stageLabel(stage: string) {
   return labels[stage] || stage
 }
 
-onMounted(() => { loadSkills() })
+onMounted(() => {
+  loadSkills()
+  // Check if personal model is running
+  getTrainingStatus().then(s => { trainingStatus.value = s }).catch(() => {})
+})
 
 function onSwitchSession(sid: string) {
   aiChat.loadSession(sid)

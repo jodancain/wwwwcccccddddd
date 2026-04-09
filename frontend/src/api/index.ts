@@ -40,6 +40,7 @@ export const getTrainingStatus = () => api.get('/training/status').then(r => r.d
 export const startTraining = () => api.post('/training/start').then(r => r.data)
 export const stopTraining = () => api.post('/training/stop').then(r => r.data)
 export const exportTrainingData = () => api.post('/training/export-data').then(r => r.data)
+export const myModelReply = (talker: string) => api.post('/training/my-reply', { talker }).then(r => r.data)
 
 // Skills
 export const listSkills = () => api.get('/skills/').then(r => r.data)
