@@ -57,6 +57,10 @@ class SyncEngine:
             logger.info(f"Decrypt done: {result}")
         except Exception as e:
             logger.error(f"Decrypt failed: {e}")
+            # Still update time so we don't spam retries
+            self._last_decrypt_time = time.time()
+        finally:
+            self.status = "idle"
 
     async def _do_sync(self):
         self.status = "syncing"
