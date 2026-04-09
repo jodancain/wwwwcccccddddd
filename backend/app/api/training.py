@@ -78,8 +78,8 @@ async def my_model_reply(req: MyModelReplyRequest):
         return {"error": "分身模型未运行，请先训练并部署"}
 
     db = await get_db()
-    # Get recent messages for context
-    recent = await db.get_recent_messages_for_talker(req.talker, limit=20)
+    # Get recent messages for context (100+ messages for better understanding)
+    recent = await db.get_recent_messages_for_talker(req.talker, limit=100)
     if not recent:
         return {"error": "没有找到对话记录"}
 
@@ -95,8 +95,8 @@ async def my_model_reply(req: MyModelReplyRequest):
     if not messages or messages[-1]["role"] != "user":
         return {"error": "最后一条消息不是对方发的，无需回复"}
 
-    # Keep last 10 turns for context
-    messages = messages[-10:]
+    # Keep last 50 turns for richer context
+    messages = messages[-50:]
 
     # Call personal model API
     try:
