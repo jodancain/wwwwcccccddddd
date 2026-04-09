@@ -167,11 +167,20 @@ def _build_conversation(messages: list[dict]) -> dict | None:
         else:
             cleaned.append(turn)
 
-    # Must have at least one human + one gpt
+    # Must end with "gpt" (LLaMA-Factory requires even turns ending with assistant)
+    if cleaned[-1]["from"] == "human":
+        cleaned.pop()  # Drop trailing human turn
+
+    # Must have at least one human + one gpt (minimum 2 turns: human→gpt)
     has_h = any(t["from"] == "human" for t in cleaned)
     has_g = any(t["from"] == "gpt" for t in cleaned)
     if not (has_h and has_g) or len(cleaned) < 2:
         return None
+
+    # Final validation: must be even length and alternating human/gpt
+    assert len(cleaned) % 2 == 0, f"Odd turns: {len(cleaned)}"
+    assert cleaned[0]["from"] == "human", "Must start with human"
+    assert cleaned[-1]["from"] == "gpt", "Must end with gpt"
 
     return {"conversations": cleaned}
 
