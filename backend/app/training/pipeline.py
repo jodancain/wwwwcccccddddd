@@ -3,6 +3,7 @@
 Optimized for RTX 3070 (8GB VRAM) + 48GB RAM.
 Uses subprocess.Popen in threads (Windows asyncio doesn't support create_subprocess_exec).
 """
+
 import asyncio
 import json
 import os
@@ -270,7 +271,8 @@ class TrainingPipeline:
         config_file = self.training_dir / "train_config.json"
         config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
-        cmd = [sys.executable, "-m", "llamafactory.cli", "train", str(config_file)]
+        wrapper = Path(__file__).parent / "train_wrapper.py"
+        cmd = [sys.executable, str(wrapper), "train", str(config_file)]
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = "0"
 
@@ -345,8 +347,9 @@ class TrainingPipeline:
         config_file = self.training_dir / "inference_config.json"
         config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
+        wrapper = Path(__file__).parent / "train_wrapper.py"
         cmd = [
-            sys.executable, "-m", "llamafactory.cli", "api",
+            sys.executable, str(wrapper), "api",
             str(config_file),
         ]
         env = os.environ.copy()
