@@ -1,13 +1,15 @@
 """Training pipeline API routes."""
 import asyncio
+from typing import Optional
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from loguru import logger
 
 from app.dependencies import get_db
 from app.training.data_exporter import export_training_data, get_export_stats
+from app.training.model_registry import registry
 from app.training.pipeline import pipeline
 
 router = APIRouter(prefix="/training", tags=["training"])
@@ -15,6 +17,18 @@ router = APIRouter(prefix="/training", tags=["training"])
 
 class MyModelReplyRequest(BaseModel):
     talker: str
+
+
+class ImportModelRequest(BaseModel):
+    path: str
+    name: str = ""
+    base_path: str = ""
+    model_type: str = ""  # "" = auto-detect, or "full" / "lora"
+    notes: str = ""
+
+
+class ScanModelsRequest(BaseModel):
+    roots: Optional[list[str]] = None
 
 
 @router.get("/stats")
@@ -59,8 +73,11 @@ async def export_data():
 
 @router.post("/start-server")
 async def start_server():
-    """Start inference server (standalone)."""
-    await pipeline._start_inference_server()
+    """Start inference server using whichever model is currently active."""
+    try:
+        await pipeline.start_inference_from_registry()
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return pipeline.get_status()
 
 
@@ -69,6 +86,96 @@ async def stop_server():
     """Stop inference server."""
     await pipeline.stop_inference()
     return {"message": "Server stopped"}
+
+
+# ---------------------------------------------------------------------------
+# Model management: import / list / scan / activate / delete
+# ---------------------------------------------------------------------------
+
+
+@router.get("/models")
+async def list_registered_models():
+    """List all imported models + which one is active + inference status."""
+    missing_deps = pipeline.missing_inference_deps()
+    return {
+        "models": registry.list_models(),
+        "active": registry.get_active(),
+        "inference": {
+            "running": pipeline._check_inference_alive(),
+            "port": pipeline.inference_port,
+            "missing_deps": missing_deps,
+            "deps_ok": not missing_deps,
+        },
+    }
+
+
+@router.post("/models/scan")
+async def scan_models(req: ScanModelsRequest):
+    """Walk known model directories and return found full/LoRA dirs.
+
+    If ``roots`` is empty, the default roots (``D:/WeChatAI_models/``,
+    ``data/models/``) are used.
+    """
+    try:
+        found = registry.scan_roots(req.roots)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"found": found}
+
+
+@router.post("/models/import")
+async def import_model(req: ImportModelRequest):
+    """Register an existing model directory.
+
+    The body maps 1-to-1 to :meth:`ModelRegistry.add_model`. ``model_type``
+    may be left blank to auto-detect (recommended). For a LoRA adapter,
+    ``base_path`` defaults to the ``base_model_name_or_path`` field of the
+    adapter config but can be overridden if you want to swap the base.
+    """
+    try:
+        entry = registry.add_model(
+            path=req.path,
+            name=req.name,
+            base_path=req.base_path,
+            model_type=req.model_type,
+            notes=req.notes,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("import_model failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"model": entry}
+
+
+@router.post("/models/{model_id}/activate")
+async def activate_model(model_id: str):
+    """Mark a model as active and (re)start the inference server with it."""
+    entry = registry.set_active(model_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="model not found")
+    try:
+        await pipeline.start_inference_from_registry()
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("activate_model failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "active": registry.get_active(),
+        "inference": {
+            "running": pipeline._check_inference_alive(),
+            "port": pipeline.inference_port,
+        },
+    }
+
+
+@router.delete("/models/{model_id}")
+async def delete_model(model_id: str):
+    """Unregister a model. Does NOT delete files on disk."""
+    if not registry.remove(model_id):
+        raise HTTPException(status_code=404, detail="model not found")
+    return {"ok": True}
 
 
 @router.post("/my-reply")

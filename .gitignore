@@ -8,6 +8,7 @@ venv/
 # Data (contains user WeChat messages)
 data/
 backend/data/
+WeChat Files/
 *.db
 
 # Environment (contains API keys)
@@ -30,3 +31,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local helper binaries
+tools/

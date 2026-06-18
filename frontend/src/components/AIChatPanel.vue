@@ -194,6 +194,114 @@
           <div class="inference-url">{{ trainingStatus.inference_url }}</div>
           <button class="skill-btn activate" @click="useMyModel">切换为我的分身模式</button>
         </div>
+
+        <!-- Model Manager -->
+        <div class="model-manager">
+          <div class="mm-header">
+            <h4>📦 模型管理</h4>
+            <div class="mm-header-actions">
+              <button class="mm-small-btn" :disabled="scanning" @click="doScanModels">
+                {{ scanning ? '扫描中...' : '🔍 扫描本地模型' }}
+              </button>
+              <button class="mm-small-btn" @click="showImportForm = !showImportForm">
+                {{ showImportForm ? '取消' : '＋ 手动导入' }}
+              </button>
+              <button class="mm-small-btn" @click="loadModels">↻</button>
+            </div>
+          </div>
+
+          <div v-if="modelMissingDeps.length" class="mm-deps-warn">
+            ⚠ 激活模型前需要先安装推理依赖：
+            <code>pip install {{ modelMissingDeps.join(' ') }}</code><br>
+            torch 建议去
+            <a href="https://pytorch.org" target="_blank">pytorch.org</a>
+            选择匹配你 GPU/CUDA 的版本。
+          </div>
+
+          <!-- Manual import form -->
+          <div v-if="showImportForm" class="mm-import-form">
+            <div class="mm-form-row">
+              <label>模型目录</label>
+              <input type="text" v-model="importForm.path"
+                     placeholder="D:\\WeChatAI_models\\my-lora" />
+            </div>
+            <div class="mm-form-row">
+              <label>显示名称</label>
+              <input type="text" v-model="importForm.name" placeholder="可选" />
+            </div>
+            <div class="mm-form-row">
+              <label>类型</label>
+              <select v-model="importForm.model_type">
+                <option value="">自动识别</option>
+                <option value="full">完整模型 (HF)</option>
+                <option value="lora">LoRA 适配器</option>
+              </select>
+            </div>
+            <div class="mm-form-row">
+              <label>基座模型</label>
+              <input type="text" v-model="importForm.base_path"
+                     placeholder="仅 LoRA 需要；留空则读取 adapter_config.json" />
+            </div>
+            <div v-if="importError" class="mm-error">{{ importError }}</div>
+            <div class="mm-form-actions">
+              <button class="mm-primary-btn" :disabled="importBusy" @click="doImportManual">
+                {{ importBusy ? '导入中...' : '导入' }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Registered models -->
+          <div v-if="modelList.length" class="mm-list">
+            <div v-for="m in modelList" :key="m.id"
+                 class="mm-model" :class="{ active: m.is_active, missing: !m.path_exists || !m.base_exists }">
+              <div class="mm-model-top">
+                <span class="mm-badge" :class="m.type">{{ m.type === 'lora' ? 'LoRA' : 'FULL' }}</span>
+                <span class="mm-name">{{ m.name }}</span>
+                <span v-if="m.is_active" class="mm-active-tag">● 当前使用</span>
+              </div>
+              <div class="mm-path" :title="m.path">{{ m.path }}</div>
+              <div v-if="m.type === 'lora' && m.base_path" class="mm-path" :title="m.base_path">
+                基座: {{ m.base_path }}
+              </div>
+              <div v-if="!m.path_exists" class="mm-warn">⚠ 路径不存在</div>
+              <div v-else-if="m.type === 'lora' && !m.base_exists" class="mm-warn">⚠ 基座模型不存在</div>
+              <div class="mm-actions">
+                <button class="mm-small-btn"
+                        :disabled="!!modelBusyId || !m.path_exists || (m.type === 'lora' && !m.base_exists) || (m.is_active && modelInferenceRunning)"
+                        @click="doActivateModel(m)">
+                  {{ modelBusyId === m.id
+                      ? '加载中...'
+                      : (m.is_active && modelInferenceRunning
+                          ? '运行中'
+                          : (m.is_active ? '重新启动' : '激活')) }}
+                </button>
+                <button v-if="m.is_active && modelInferenceRunning" class="mm-small-btn danger" @click="doStopInference">
+                  ⏹ 停止
+                </button>
+                <button class="mm-small-btn ghost" @click="doDeleteModel(m)">移除</button>
+              </div>
+            </div>
+          </div>
+          <div v-else class="mm-empty">
+            还没有导入任何模型。点击「扫描本地模型」自动发现 <code>D:/WeChatAI_models/</code> 下的模型，或手动导入。
+          </div>
+
+          <!-- Scan results -->
+          <div v-if="scanResults.length" class="mm-scan-results">
+            <div class="mm-scan-title">🔍 扫描结果 ({{ scanResults.length }})</div>
+            <div v-for="s in scanResults" :key="s.path" class="mm-scan-item">
+              <div class="mm-scan-main">
+                <span class="mm-badge" :class="s.type">{{ s.type === 'lora' ? 'LoRA' : 'FULL' }}</span>
+                <span class="mm-name">{{ s.name }}</span>
+              </div>
+              <div class="mm-path" :title="s.path">{{ s.path }}</div>
+              <div v-if="s.base_path" class="mm-path">基座: {{ s.base_path }}</div>
+              <button v-if="!s.registered" class="mm-small-btn" :disabled="importBusy"
+                      @click="doImportScanned(s)">导入</button>
+              <span v-else class="mm-registered-tag">已导入</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -267,7 +375,7 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted } from 'vue'
 import { useAIChat } from '../composables/useAIChat'
-import { globalSummaryStream, listSkills, importSkill, deleteSkill as apiDeleteSkill, generateSkillStream, getTrainingStats, getTrainingStatus, startTraining, stopTraining, myModelReply } from '../api'
+import { globalSummaryStream, listSkills, importSkill, deleteSkill as apiDeleteSkill, generateSkillStream, getTrainingStats, getTrainingStatus, startTraining, stopTraining, myModelReply, listModels, scanModels, importModel, activateModel, deleteModel, stopInferenceServer } from '../api'
 import { marked } from 'marked'
 
 const props = defineProps<{
@@ -303,6 +411,19 @@ const showTrainingPanel = ref(false)
 const trainingStats = ref<any>(null)
 const trainingStatus = ref<any>(null)
 let trainingPollTimer: any = null
+
+// === Model manager state ===
+const modelList = ref<any[]>([])
+const activeModel = ref<any>(null)
+const modelInferenceRunning = ref(false)
+const modelMissingDeps = ref<string[]>([])
+const scanResults = ref<any[]>([])
+const scanning = ref(false)
+const modelBusyId = ref<string>('')
+const importForm = ref({ path: '', name: '', base_path: '', model_type: '' })
+const importError = ref('')
+const importBusy = ref(false)
+const showImportForm = ref(false)
 const cloneReplying = ref(false)
 
 function renderContent(content: string) {
@@ -422,7 +543,112 @@ async function openTrainingPanel() {
   showTrainingPanel.value = true
   try { trainingStats.value = await getTrainingStats() } catch {}
   try { trainingStatus.value = await getTrainingStatus() } catch {}
+  loadModels()
   startPollingTraining()
+}
+
+// === Model manager functions ===
+async function loadModels() {
+  try {
+    const data = await listModels()
+    modelList.value = data.models || []
+    activeModel.value = data.active || null
+    modelInferenceRunning.value = !!(data.inference && data.inference.running)
+    modelMissingDeps.value = (data.inference && data.inference.missing_deps) || []
+  } catch (err: any) {
+    console.error('loadModels', err)
+  }
+}
+
+async function doScanModels() {
+  scanning.value = true
+  try {
+    const data = await scanModels()
+    scanResults.value = data.found || []
+  } catch (err: any) {
+    alert('扫描失败: ' + (err?.response?.data?.detail || err.message))
+  } finally {
+    scanning.value = false
+  }
+}
+
+async function doImportScanned(entry: any) {
+  if (entry.registered) return
+  importBusy.value = true
+  try {
+    await importModel({
+      path: entry.path,
+      name: entry.name,
+      base_path: entry.base_path || '',
+      model_type: entry.type,
+    })
+    await loadModels()
+    await doScanModels()
+  } catch (err: any) {
+    alert('导入失败: ' + (err?.response?.data?.detail || err.message))
+  } finally {
+    importBusy.value = false
+  }
+}
+
+async function doImportManual() {
+  importError.value = ''
+  if (!importForm.value.path.trim()) {
+    importError.value = '请输入模型目录路径'
+    return
+  }
+  importBusy.value = true
+  try {
+    await importModel({
+      path: importForm.value.path.trim(),
+      name: importForm.value.name.trim(),
+      base_path: importForm.value.base_path.trim(),
+      model_type: importForm.value.model_type || '',
+    })
+    importForm.value = { path: '', name: '', base_path: '', model_type: '' }
+    showImportForm.value = false
+    await loadModels()
+  } catch (err: any) {
+    importError.value = err?.response?.data?.detail || err.message || '导入失败'
+  } finally {
+    importBusy.value = false
+  }
+}
+
+async function doActivateModel(m: any) {
+  if (modelBusyId.value) return
+  modelBusyId.value = m.id
+  try {
+    await activateModel(m.id)
+    await loadModels()
+    // After activation the inference server is booting; trainingStatus will
+    // reflect inference_running once it's ready.
+    try { trainingStatus.value = await getTrainingStatus() } catch {}
+  } catch (err: any) {
+    alert('激活失败: ' + (err?.response?.data?.detail || err.message))
+  } finally {
+    modelBusyId.value = ''
+  }
+}
+
+async function doDeleteModel(m: any) {
+  if (!confirm(`确认从列表中移除 "${m.name}"？（磁盘文件不会被删除）`)) return
+  try {
+    await deleteModel(m.id)
+    await loadModels()
+  } catch (err: any) {
+    alert('删除失败: ' + (err?.response?.data?.detail || err.message))
+  }
+}
+
+async function doStopInference() {
+  try {
+    await stopInferenceServer()
+    await loadModels()
+    try { trainingStatus.value = await getTrainingStatus() } catch {}
+  } catch (err: any) {
+    alert('停止失败: ' + (err?.response?.data?.detail || err.message))
+  }
 }
 
 function startPollingTraining() {

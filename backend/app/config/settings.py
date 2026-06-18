@@ -32,6 +32,19 @@ class Settings(BaseSettings):
     # Data
     DATA_DIR: str = "./data"
 
+    # Weixin 4.x: override path to db_storage directory.
+    # If empty, the decryptor will auto-detect via %APPDATA%\Tencent\xwechat\config.
+    WX_DB_DIR: str = ""
+    # Weixin 4.x database data key. Optional 64-char hex key captured by an
+    # external helper; when set, the decryptor verifies it against each DB.
+    WX_DB_KEY: str = ""
+
+    # Inference venv: separate Python env that has torch/transformers/peft/accelerate.
+    # Kept separate because the backend venv often lives on a network share where
+    # Windows can't load native .pyd DLLs (memory-map over SMB is unsupported).
+    # Leave empty to fall back to the backend's own Python interpreter.
+    INFERENCE_PYTHON: str = "C:/wechatai-inference-venv/Scripts/python.exe"
+
     @property
     def data_path(self) -> Path:
         p = Path(self.DATA_DIR)

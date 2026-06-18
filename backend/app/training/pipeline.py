@@ -323,15 +323,117 @@ class TrainingPipeline:
     # ==================== INFERENCE ====================
 
     async def _start_inference_async(self, base_model_path: str):
-        """Start OpenAI-compatible inference server."""
+        """Start OpenAI-compatible inference server for the freshly trained
+        LoRA. Also auto-registers it in the model registry and marks it
+        active so the user can switch between this and any other imported
+        model from the UI afterwards."""
+        from app.training.model_registry import registry, MODEL_TYPE_LORA
+
         lora_dir = self.output_dir / "lora"
+        try:
+            entry = registry.add_model(
+                path=str(lora_dir),
+                name="我的微信分身 (LoRA)",
+                base_path=base_model_path,
+                model_type=MODEL_TYPE_LORA,
+                notes="由训练流水线自动生成",
+            )
+            registry.set_active(entry["id"])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to register trained LoRA: {e}")
+
+        await self.start_inference_from_registry()
+
+    _INFERENCE_DEPS = ("torch", "transformers", "peft", "accelerate")
+
+    def _inference_python(self) -> str:
+        """Return the interpreter used to run ``serve_model.py``. Prefer the
+        user-configured INFERENCE_PYTHON (a local-disk venv with torch) and
+        fall back to the current interpreter otherwise."""
+        settings = get_settings()
+        override = getattr(settings, "INFERENCE_PYTHON", "") or ""
+        if override and Path(override).exists():
+            return override
+        return sys.executable
+
+    def missing_inference_deps(self) -> list[str]:
+        """Check deps inside the *inference* interpreter (may differ from the
+        backend venv — see :meth:`_inference_python`). Uses a subprocess so
+        we don't import heavy modules into the backend process."""
+        py = self._inference_python()
+        import importlib.util as u
+        # Fast path: checking from this interpreter is fine when they match.
+        if Path(py).resolve() == Path(sys.executable).resolve():
+            return [p for p in self._INFERENCE_DEPS if u.find_spec(p) is None]
+        try:
+            script = (
+                "import importlib.util as u, json, sys\n"
+                f"mods = {self._INFERENCE_DEPS!r}\n"
+                "missing = [m for m in mods if u.find_spec(m) is None]\n"
+                "print(json.dumps(missing))\n"
+            )
+            proc = subprocess.run(
+                [py, "-c", script],
+                capture_output=True, text=True, timeout=15,
+                env=_make_env(),
+            )
+            if proc.returncode == 0:
+                import json
+                out = (proc.stdout.strip().splitlines() or [""])[-1]
+                return json.loads(out)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"deps probe failed: {e}")
+        return list(self._INFERENCE_DEPS)
+
+    async def start_inference_from_registry(self) -> None:
+        """(Re)start the inference server using whichever model is currently
+        marked active in the registry. Safe to call repeatedly — an existing
+        subprocess is stopped first and zombie servers on the port are left
+        alone (caller should have used ``stop_inference`` first if needed)."""
+        from app.training.model_registry import registry, MODEL_TYPE_LORA
+
+        active = registry.get_active()
+        if not active:
+            raise RuntimeError("没有选中的模型，先在模型管理中激活一个")
+
+        missing = self.missing_inference_deps()
+        if missing:
+            raise RuntimeError(
+                "推理依赖缺失: " + ", ".join(missing) +
+                "。请运行: pip install torch transformers peft accelerate  "
+                "(torch 建议从 https://pytorch.org 选择带 CUDA 的版本)"
+            )
+
+        model_path = active.get("path", "")
+        if not model_path or not Path(model_path).exists():
+            raise RuntimeError(f"模型路径不存在: {model_path}")
+
+        if active.get("type") == MODEL_TYPE_LORA:
+            base = active.get("base_path", "")
+            if not base or not Path(base).exists():
+                raise RuntimeError(f"LoRA 基座模型不存在: {base}")
+            serve_args = ["--model", base, "--lora", model_path]
+        else:
+            serve_args = ["--model", model_path]
+
+        # Stop any previously launched subprocess managed by this backend
+        if self.inference_process and self.inference_process.poll() is None:
+            try:
+                self.inference_process.terminate()
+                self.inference_process.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                try:
+                    self.inference_process.kill()
+                except Exception:
+                    pass
+        self.inference_process = None
 
         serve_script = Path(__file__).parent / "serve_model.py"
         cmd = [
-            sys.executable, str(serve_script),
-            "--model", base_model_path,
-            "--lora", str(lora_dir),
+            self._inference_python(), str(serve_script),
+            *serve_args,
             "--port", str(self.inference_port),
+            "--name", active.get("name", "my-style"),
         ]
         logger.info(f"Starting inference: {' '.join(cmd)}")
         self.inference_process = subprocess.Popen(

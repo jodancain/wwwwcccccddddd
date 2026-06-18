@@ -42,6 +42,18 @@ export const stopTraining = () => api.post('/training/stop').then(r => r.data)
 export const exportTrainingData = () => api.post('/training/export-data').then(r => r.data)
 export const myModelReply = (talker: string) => api.post('/training/my-reply', { talker }).then(r => r.data)
 
+// Model registry: import / scan / activate fine-tuned and base models
+export const listModels = () => api.get('/training/models').then(r => r.data)
+export const scanModels = (roots?: string[]) =>
+  api.post('/training/models/scan', { roots: roots || null }).then(r => r.data)
+export const importModel = (body: { path: string; name?: string; base_path?: string; model_type?: string; notes?: string }) =>
+  api.post('/training/models/import', body).then(r => r.data)
+export const activateModel = (modelId: string) =>
+  api.post(`/training/models/${modelId}/activate`).then(r => r.data)
+export const deleteModel = (modelId: string) =>
+  api.delete(`/training/models/${modelId}`).then(r => r.data)
+export const stopInferenceServer = () => api.post('/training/stop-server').then(r => r.data)
+
 // Skills
 export const listSkills = () => api.get('/skills/').then(r => r.data)
 export const getSkill = (slug: string) => api.get(`/skills/${slug}`).then(r => r.data)

@@ -84,26 +84,38 @@ def chat_completions(req: ChatRequest):
 
 
 def main():
-    global model, tokenizer
+    global model, tokenizer, model_name
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True, help="Base model path")
-    parser.add_argument("--lora", required=True, help="LoRA adapter path")
+    parser.add_argument("--model", required=True, help="Base / full model path")
+    parser.add_argument("--lora", default="", help="Optional LoRA adapter path")
     parser.add_argument("--port", type=int, default=8090)
+    parser.add_argument("--name", default="", help="Display name exposed in /v1/models")
     args = parser.parse_args()
 
-    print(f"Loading model: {args.model}")
-    tokenizer = AutoTokenizer.from_pretrained(args.lora, trust_remote_code=True)
+    if args.name:
+        model_name = args.name
+
+    # Prefer tokenizer shipped alongside the LoRA (training pipeline copies
+    # chat_template etc. into the adapter dir). Fall back to the base model.
+    tokenizer_path = args.lora or args.model
+    print(f"Loading tokenizer from: {tokenizer_path}")
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    print(f"Loading base model: {args.model}")
     base_model = AutoModelForCausalLM.from_pretrained(
         args.model, torch_dtype=torch.float16, device_map="auto", trust_remote_code=True,
     )
-    print(f"Loading LoRA adapter: {args.lora}")
-    model = PeftModel.from_pretrained(base_model, args.lora)
+
+    if args.lora:
+        print(f"Loading LoRA adapter: {args.lora}")
+        model = PeftModel.from_pretrained(base_model, args.lora)
+    else:
+        model = base_model
     model.eval()
-    print(f"Model loaded! Starting server on port {args.port}")
+    print(f"Model '{model_name}' loaded. Starting server on port {args.port}")
 
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
 

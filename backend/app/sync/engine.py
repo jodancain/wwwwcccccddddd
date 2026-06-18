@@ -86,6 +86,17 @@ class SyncEngine:
             result = await asyncio.to_thread(self.decryptor.decrypt_databases)
             self._last_decrypt_time = time.time()
             logger.info(f"Decrypt done: {result}")
+            # Propagate the self-wxid from the db_storage path → parser, so
+            # is_sender gets set correctly on outbound messages.
+            src_dir = self.decryptor.source_db_dir() or ""
+            if src_dir:
+                import os, re
+                parts = os.path.normpath(src_dir).split(os.sep)
+                for i, p in enumerate(parts):
+                    if p.startswith("wxid_") and i + 1 < len(parts) and parts[i + 1] == "db_storage":
+                        wxid = re.sub(r"_[a-z0-9]+$", "", p)
+                        self.parser.set_self_wxid(wxid)
+                        break
         except Exception as e:
             logger.error(f"Decrypt failed: {e}")
             self._last_decrypt_time = time.time()
