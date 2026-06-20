@@ -11,6 +11,10 @@ const backendWsUrl = backendUrl.replace(/^http/, 'ws')
 
 export default defineConfig({
   plugins: [vue()],
+  css: {
+    // Keep this project isolated from PostCSS configs in parent directories.
+    postcss: {},
+  },
   build: {
     rollupOptions: {
       input: 'index.html',
