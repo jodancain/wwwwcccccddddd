@@ -219,6 +219,7 @@ WeChatai/
 | `OPENAI_MODEL` | `gpt-4o` | 模型名称 |
 | `SYNC_INTERVAL_SECONDS` | `7` | 消息同步间隔 |
 | `APP_PORT` | `8090` | 后端端口 |
+| `INFERENCE_PORT` | `8091` | 本地分身模型推理服务端口 |
 
 ## 注意事项
 

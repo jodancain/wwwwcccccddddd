@@ -54,13 +54,20 @@ SENSITIVE_PATTERNS = [
 ]
 
 EXPECTED_BACKEND_PORT = "8090"
+EXPECTED_INFERENCE_PORT = "8091"
 
 PORT_DEFAULT_FILES = [
-    (ROOT / "backend" / "app" / "config" / "settings.py", f"APP_PORT: int = {EXPECTED_BACKEND_PORT}"),
-    (ROOT / "frontend" / "vite.config.ts", f"http://127.0.0.1:{EXPECTED_BACKEND_PORT}"),
-    (ROOT / ".env.example", f"APP_PORT={EXPECTED_BACKEND_PORT}"),
-    (ROOT / "scripts" / "verify_all.py", f"http://127.0.0.1:{EXPECTED_BACKEND_PORT}"),
-    (ROOT / "scripts" / "smoke_test.py", f"http://127.0.0.1:{EXPECTED_BACKEND_PORT}"),
+    (ROOT / "backend" / "app" / "config" / "settings.py", f"APP_PORT: int = {EXPECTED_BACKEND_PORT}", "backend port"),
+    (
+        ROOT / "backend" / "app" / "config" / "settings.py",
+        f"INFERENCE_PORT: int = {EXPECTED_INFERENCE_PORT}",
+        "inference port",
+    ),
+    (ROOT / "frontend" / "vite.config.ts", f"http://127.0.0.1:{EXPECTED_BACKEND_PORT}", "frontend proxy port"),
+    (ROOT / ".env.example", f"APP_PORT={EXPECTED_BACKEND_PORT}", "example backend port"),
+    (ROOT / ".env.example", f"INFERENCE_PORT={EXPECTED_INFERENCE_PORT}", "example inference port"),
+    (ROOT / "scripts" / "verify_all.py", f"http://127.0.0.1:{EXPECTED_BACKEND_PORT}", "verify backend port"),
+    (ROOT / "scripts" / "smoke_test.py", f"http://127.0.0.1:{EXPECTED_BACKEND_PORT}", "smoke backend port"),
 ]
 
 
@@ -100,14 +107,17 @@ def main() -> int:
         if secrets:
             failures.append(f"{rel}: possible secret material: {', '.join(secrets)}")
 
-    for path, expected in PORT_DEFAULT_FILES:
+    for path, expected, label in PORT_DEFAULT_FILES:
         rel = path.relative_to(ROOT)
         if not path.exists():
             failures.append(f"{rel}: missing port default source")
             continue
         text = path.read_text(encoding="utf-8")
         if expected not in text:
-            failures.append(f"{rel}: backend default port must stay on {EXPECTED_BACKEND_PORT}")
+            failures.append(f"{rel}: {label} default is missing expected value {expected}")
+
+    if EXPECTED_BACKEND_PORT == EXPECTED_INFERENCE_PORT:
+        failures.append("backend and inference default ports must be different")
 
     if failures:
         print("Source health check failed:")

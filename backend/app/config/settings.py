@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     # Windows can't load native .pyd DLLs (memory-map over SMB is unsupported).
     # Leave empty to fall back to the backend's own Python interpreter.
     INFERENCE_PYTHON: str = "C:/wechatai-inference-venv/Scripts/python.exe"
+    INFERENCE_PORT: int = 8091
 
     @property
     def data_path(self) -> Path:

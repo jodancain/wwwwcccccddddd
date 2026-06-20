@@ -544,6 +544,16 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             and _has_keys(models.get("inference"), {"running", "port", "missing_deps", "deps_ok"}),
             f"status={status}",
         )
+        backend_port = urllib.parse.urlparse(base_url).port
+        inference_port = models.get("inference", {}).get("port") if isinstance(models, dict) else None
+        add(
+            checks,
+            "training inference port separate",
+            status == 200
+            and isinstance(inference_port, int)
+            and inference_port != backend_port,
+            f"backend={backend_port} inference={inference_port}",
+        )
 
         status, scanned_models = client.request("POST", "/api/training/models/scan", {"roots": []})
         add(

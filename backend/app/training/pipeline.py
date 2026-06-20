@@ -82,11 +82,11 @@ class TrainingPipeline:
         self.message = ""
         self.error = ""
         self.inference_process: Optional[subprocess.Popen] = None
-        self.inference_port = 8090
         self._running = False
         self._cancel = False
 
         settings = get_settings()
+        self.inference_port = settings.INFERENCE_PORT
         self.data_dir = Path(settings.DATA_DIR)
         self.training_dir = self.data_dir / "training"
         self.models_dir = Path("D:/WeChatAI_models")
