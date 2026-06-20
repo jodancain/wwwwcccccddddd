@@ -97,6 +97,10 @@ def query(params: dict[str, Any]) -> str:
     return urllib.parse.urlencode(params)
 
 
+def _masked_secret(value: Any) -> bool:
+    return value == "" or (isinstance(value, str) and value.startswith("***") and len(value) == 7)
+
+
 def _websocket_probe(ws_url: str) -> tuple[bool, str]:
     try:
         parsed = urllib.parse.urlparse(ws_url)
@@ -249,6 +253,15 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
 
         status, settings = client.request("GET", "/api/settings/")
         add(checks, "settings", status == 200 and isinstance(settings, dict), f"status={status}")
+        add(
+            checks,
+            "settings masks API keys",
+            status == 200
+            and isinstance(settings, dict)
+            and _masked_secret(settings.get("GEMINI_API_KEY", ""))
+            and _masked_secret(settings.get("OPENAI_API_KEY", "")),
+            f"status={status}",
+        )
 
         status, wechat = client.request("GET", "/api/settings/wechat/status")
         add(checks, "wechat status", status == 200 and isinstance(wechat, dict), f"status={status}")

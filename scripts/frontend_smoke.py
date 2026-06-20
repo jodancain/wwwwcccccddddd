@@ -113,7 +113,11 @@ def run(frontend_url: str) -> list[Check]:
     )
 
     component_expectations = [
-        ("/src/components/ConversationList.vue", "conversation component", ["conversation-list", "conversation-item"]),
+        (
+            "/src/components/ConversationList.vue",
+            "conversation component",
+            ["conversation-list", "conversation-item", "loadError", "result?.value"],
+        ),
         ("/src/components/MessageThread.vue", "message component", ["message-thread", "date-jump-btn"]),
         ("/src/components/AIChatPanel.vue", "ai panel component", ["ai-panel", "quick-action-btn"]),
         (

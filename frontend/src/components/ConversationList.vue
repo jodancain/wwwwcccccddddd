@@ -40,7 +40,7 @@
 
       <div v-if="conversations.length === 0" class="empty-state" style="padding: 40px 20px;">
         <div style="font-size: 32px; opacity: 0.3; margin-bottom: 8px;">💬</div>
-        <div style="font-size: 13px;">暂无对话</div>
+        <div style="font-size: 13px;">{{ loadError || '暂无对话' }}</div>
       </div>
     </div>
 
@@ -87,6 +87,7 @@ const emit = defineEmits<{
 
 const conversations = ref<any[]>([])
 const searchQuery = ref('')
+const loadError = ref('')
 let searchTimer: number | null = null
 
 const contextMenu = reactive({
@@ -138,9 +139,22 @@ function onGenerateSkill() {
 
 async function loadConversations(search = '') {
   try {
-    conversations.value = await getConversations(search)
+    const result = await getConversations(search)
+    if (Array.isArray(result)) {
+      conversations.value = result
+    } else if (Array.isArray(result?.items)) {
+      conversations.value = result.items
+    } else if (Array.isArray(result?.value)) {
+      conversations.value = result.value
+    } else {
+      conversations.value = []
+      throw new Error('对话接口返回格式不正确')
+    }
+    loadError.value = ''
   } catch (err) {
     console.error('Failed to load conversations:', err)
+    conversations.value = []
+    loadError.value = '对话加载失败，请检查后端连接'
   }
 }
 
