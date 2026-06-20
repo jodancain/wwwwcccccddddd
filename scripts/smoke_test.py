@@ -101,6 +101,10 @@ def _masked_secret(value: Any) -> bool:
     return value == "" or (isinstance(value, str) and value.startswith("***") and len(value) == 7)
 
 
+def _has_keys(value: Any, keys: set[str]) -> bool:
+    return isinstance(value, dict) and keys.issubset(value.keys())
+
+
 def _websocket_probe(ws_url: str) -> tuple[bool, str]:
     try:
         parsed = urllib.parse.urlparse(ws_url)
@@ -230,6 +234,16 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
 
         status, contacts = client.request("GET", "/api/contacts/?limit=5")
         add(checks, "contacts list", status == 200 and isinstance(contacts, (list, dict)), f"status={status}")
+        first_contact = contacts[0] if isinstance(contacts, list) and contacts else {}
+        add(
+            checks,
+            "contacts shape",
+            status == 200
+            and isinstance(contacts, list)
+            and bool(contacts)
+            and _has_keys(first_contact, {"username", "nickname", "remark", "is_group"}),
+            f"status={status}",
+        )
 
         status, friend_contacts = client.request("GET", "/api/contacts/?type=friend&limit=3")
         add(
@@ -263,6 +277,25 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
         add(checks, "settings", status == 200 and isinstance(settings, dict), f"status={status}")
         add(
             checks,
+            "settings shape",
+            status == 200
+            and _has_keys(
+                settings,
+                {
+                    "AI_PROVIDER",
+                    "GEMINI_API_KEY",
+                    "GEMINI_MODEL",
+                    "OPENAI_API_KEY",
+                    "OPENAI_BASE_URL",
+                    "OPENAI_MODEL",
+                    "SYNC_INTERVAL_SECONDS",
+                    "DECRYPT_INTERVAL_SECONDS",
+                },
+            ),
+            f"status={status}",
+        )
+        add(
+            checks,
             "settings masks API keys",
             status == 200
             and isinstance(settings, dict)
@@ -273,6 +306,12 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
 
         status, wechat = client.request("GET", "/api/settings/wechat/status")
         add(checks, "wechat status", status == 200 and isinstance(wechat, dict), f"status={status}")
+        add(
+            checks,
+            "wechat status shape",
+            status == 200 and _has_keys(wechat, {"wechat_running", "decrypted_dir", "decrypted_db_count"}),
+            f"status={status}",
+        )
 
         if talker:
             status, replies = client.request("POST", "/api/ai/suggest-replies", {"talker": talker})
