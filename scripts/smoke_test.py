@@ -174,7 +174,9 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             add(
                 checks,
                 "sync trigger",
-                status == 200 and isinstance(triggered, dict) and "message" in triggered,
+                status == 200
+                and isinstance(triggered, dict)
+                and triggered.get("message") == "Sync triggered",
                 f"status={status}",
             )
 
