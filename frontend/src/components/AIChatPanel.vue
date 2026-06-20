@@ -679,4 +679,10 @@ watch(() => [aiChat.messages.value.length, aiChat.streamingContent.value], () =>
 onMounted(() => {
   loadSkills()
 })
+
+defineExpose({
+  startGenerateSkill,
+  openSkillPanel,
+  openTrainingPanel,
+})
 </script>

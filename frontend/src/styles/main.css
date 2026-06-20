@@ -54,6 +54,17 @@ html, body, #app { height: 100%; width: 100%; overflow: hidden;
 .context-menu-item { padding: 8px 16px; font-size: 13px; cursor: pointer; color: var(--wechat-text); }
 .context-menu-item:hover { background: #f0f0f0; }
 .context-menu-backdrop { position: fixed; inset: 0; z-index: 999; }
+.api-dialog-overlay { position: fixed; inset: 0; z-index: 1100; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.api-dialog { width: min(520px, 100%); background: #fff; color: var(--wechat-text); border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,0.25); padding: 18px; }
+.api-dialog-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.api-dialog-header h3 { font-size: 17px; font-weight: 700; }
+.api-dialog-header button { border: none; background: transparent; font-size: 22px; line-height: 1; cursor: pointer; color: #777; }
+.api-dialog-row { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; font-size: 13px; }
+.api-dialog-row span, .api-dialog-label { color: var(--wechat-text-secondary); font-size: 12px; }
+.api-dialog-label { display: block; margin: 12px 0 6px; }
+.api-dialog-copy { display: flex; gap: 8px; }
+.api-dialog-copy input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--wechat-border); border-radius: 4px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.api-dialog-copy button { padding: 8px 12px; border: none; border-radius: 4px; background: var(--wechat-green); color: #fff; cursor: pointer; white-space: nowrap; }
 
 /* ===== Message Thread ===== */
 .message-thread { flex: 1; display: flex; flex-direction: column; background: var(--wechat-chat-bg); min-width: 0; position: relative; }
