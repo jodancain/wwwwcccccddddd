@@ -468,6 +468,22 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             if api_ok:
                 created_api_id = api["id"]
                 api_key = api["api_key"]
+
+                status, api_list = client.request("GET", "/api/chat-apis/")
+                listed_api = None
+                if isinstance(api_list, list):
+                    listed_api = next((item for item in api_list if item.get("id") == created_api_id), None)
+                add(
+                    checks,
+                    "chat api list masks key",
+                    status == 200
+                    and isinstance(listed_api, dict)
+                    and "api_key" not in listed_api
+                    and isinstance(listed_api.get("api_key_preview"), str)
+                    and listed_api["api_key_preview"].endswith(api_key[-8:]),
+                    f"status={status}",
+                )
+
                 status, _ = client.request("GET", f"/open/v1/{created_api_id}/info")
                 add(checks, "open api missing auth", status == 401, f"status={status}")
 

@@ -24,11 +24,13 @@ class CreateApiRequest(BaseModel):
 async def list_apis():
     db = await get_db()
     apis = await db.list_chat_apis()
-    # Mask api_key to show only last 8 chars
-    for a in apis:
-        key = a.get("api_key", "")
-        a["api_key_preview"] = f"...{key[-8:]}" if len(key) > 8 else key
-    return apis
+    masked = []
+    for api in apis:
+        item = dict(api)
+        key = item.pop("api_key", "")
+        item["api_key_preview"] = f"...{key[-8:]}" if len(key) > 8 else key
+        masked.append(item)
+    return masked
 
 
 @mgmt_router.post("/create")
