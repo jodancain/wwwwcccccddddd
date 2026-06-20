@@ -13,7 +13,8 @@ FRONTEND_SRC = ROOT / "frontend" / "src"
 ROUTER_RE = re.compile(r"(\w+)\s*=\s*APIRouter\(\s*prefix=[\"']([^\"']*)[\"']")
 ROUTE_RE = re.compile(r"@(\w+)\.(get|post|delete|put|patch)\(\s*[\"']([^\"']*)[\"']")
 AXIOS_RE = re.compile(r"\bapi\.(get|post|delete|put|patch)\(\s*([`'\"])(.+?)\2", re.DOTALL)
-FETCH_RE = re.compile(r"\bfetch\(\s*([`'\"])(/api/.+?)\1", re.DOTALL)
+FETCH_RE = re.compile(r"\bfetch\(\s*([`'\"])(/api/.+?)\1\s*(?:,\s*(\{.*?\})\s*)?\)", re.DOTALL)
+FETCH_METHOD_RE = re.compile(r"\bmethod\s*:\s*([`'\"])(get|post|delete|put|patch)\1", re.IGNORECASE)
 MEDIA_URL_RE = re.compile(r"=>\s*([`'\"])(/api/media/image/.+?)\1")
 
 
@@ -29,6 +30,13 @@ def route_key(method: str, path: str) -> tuple[str, str]:
     normalized = clean_path(path)
     normalized = re.sub(r"\{[^}/]+\}", "{param}", normalized)
     return method.upper(), normalized
+
+
+def fetch_method(options: str | None) -> str:
+    if not options:
+        return "GET"
+    match = FETCH_METHOD_RE.search(options)
+    return match.group(2).upper() if match else "GET"
 
 
 def collect_backend_routes() -> set[tuple[str, str]]:
@@ -58,8 +66,8 @@ def collect_frontend_calls() -> set[tuple[str, str]]:
         for method, _quote, path in AXIOS_RE.findall(text):
             calls.add(route_key(method, f"/api{path}"))
 
-        for _quote, path in FETCH_RE.findall(text):
-            calls.add(route_key("POST", path))
+        for _quote, path, options in FETCH_RE.findall(text):
+            calls.add(route_key(fetch_method(options), path))
 
         for _quote, path in MEDIA_URL_RE.findall(text):
             calls.add(route_key("GET", path))
