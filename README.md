@@ -120,6 +120,8 @@ npm run verify
 - 前端烟测（Vite 入口、Vue 模块转换、前端代理）
 - 前端生产构建
 
+推送到 GitHub 时，`.github/workflows/verify.yml` 会自动执行不依赖本地微信数据的检查：源码健康、Python 编译和前端构建。运行时烟测仍需在本机启动后端和前端后执行。
+
 如果需要指定地址：
 
 ```bash
