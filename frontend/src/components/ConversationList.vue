@@ -154,7 +154,7 @@ function getDisplayName(conv: any) {
 }
 
 function getAvatar(conv: any) {
-  return getDisplayName(conv)[0] || '?'
+  return Array.from(getDisplayName(conv))[0] || '?'
 }
 
 function formatTime(timestamp: number) {

@@ -474,7 +474,7 @@ async function refresh() {
 }
 
 function scrollToBottom() { if (messagesContainer.value) messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight }
-function getSenderInitial(msg: any) { return (msg.sender || displayName.value || '?')[0] }
+function getSenderInitial(msg: any) { return Array.from(msg.sender || displayName.value || '?')[0] || '?' }
 function getImageSrc(msg: any) { return getImageUrl(msg.wechat_local_id) }
 function truncate(s: string, n: number) { return s && s.length > n ? s.slice(0, n) + '...' : s }
 function onImgError(e: Event) { const img = e.target as HTMLImageElement; img.style.display = 'none'; img.insertAdjacentHTML('afterend', '<span class="img-fail">[图片]</span>') }

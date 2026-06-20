@@ -37,3 +37,6 @@ jobs:
       - name: Build frontend
         run: npm run build
         working-directory: frontend
+
+      - name: Check frontend dist
+        run: python scripts/frontend_dist_health.py

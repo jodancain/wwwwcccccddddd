@@ -69,6 +69,25 @@ def run(frontend_url: str) -> list[Check]:
         f"status={status} content-type={content_type}",
     )
 
+    component_expectations = [
+        ("/src/components/ConversationList.vue", "conversation component", ["conversation-list", "conversation-item"]),
+        ("/src/components/MessageThread.vue", "message component", ["message-thread", "date-jump-btn"]),
+        ("/src/components/AIChatPanel.vue", "ai panel component", ["ai-panel", "quick-action-btn"]),
+        ("/src/api/index.ts", "api module", ["getConversations", "aiChatStream", "globalSummaryStream"]),
+    ]
+    for path, name, needles in component_expectations:
+        status, content_type, raw = fetch(frontend_url, path)
+        body = raw.decode("utf-8", errors="replace")
+        add(
+            checks,
+            name,
+            status == 200
+            and "javascript" in content_type
+            and all(needle in body for needle in needles)
+            and "\ufffd" not in body,
+            f"status={status} content-type={content_type}",
+        )
+
     status, content_type, raw = fetch(frontend_url, "/api/sync/status")
     sync = parse_json(raw)
     add(

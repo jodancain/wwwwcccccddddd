@@ -74,7 +74,12 @@ def main() -> int:
     ]
 
     if not args.skip_build:
-        steps.append(("frontend build", ["npm.cmd", "run", "build"], FRONTEND))
+        steps.extend(
+            [
+                ("frontend build", ["npm.cmd", "run", "build"], FRONTEND),
+                ("frontend dist health", [args.python, "scripts/frontend_dist_health.py"], ROOT),
+            ]
+        )
 
     failed = []
     for name, cmd, cwd in steps:

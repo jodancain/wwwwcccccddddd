@@ -17,6 +17,7 @@ TEXT_FILES = [
     ROOT / "README.md",
     ROOT / "start.bat",
     ROOT / ".env.example",
+    ROOT / "frontend" / "index.html",
 ]
 
 TEXT_SUFFIXES = {".bat", ".css", ".md", ".py", ".ts", ".vue"}
