@@ -392,9 +392,28 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             status == 200 and isinstance(sessions, list),
             f"status={status} count={len(sessions) if isinstance(sessions, list) else 'n/a'}",
         )
+        first_session = sessions[0] if isinstance(sessions, list) and sessions else {}
+        add(
+            checks,
+            "ai sessions shape",
+            status == 200
+            and isinstance(sessions, list)
+            and (not sessions or _has_keys(first_session, {"id", "title", "talker", "created_at", "updated_at"})),
+            f"status={status}",
+        )
 
         status, stats = client.request("GET", "/api/training/stats")
         add(checks, "training stats", status == 200 and isinstance(stats, dict), f"status={status}")
+        add(
+            checks,
+            "training stats shape",
+            status == 200
+            and _has_keys(
+                stats,
+                {"conversation_count", "my_text_messages", "other_text_messages", "already_exported", "file_size_mb"},
+            ),
+            f"status={status}",
+        )
 
         if include_heavy:
             status, export = client.request("POST", "/api/training/export-data")
@@ -415,6 +434,13 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             status == 200 and isinstance(training, dict) and "stage" in training,
             f"status={status} stage={training.get('stage') if isinstance(training, dict) else 'n/a'}",
         )
+        add(
+            checks,
+            "training status shape",
+            status == 200
+            and _has_keys(training, {"stage", "progress", "message", "error", "inference_running", "inference_url"}),
+            f"status={status}",
+        )
 
         status, models = client.request("GET", "/api/training/models")
         add(
@@ -422,6 +448,15 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             "training models",
             status == 200 and isinstance(models, dict) and "models" in models,
             f"status={status} count={len(models.get('models', [])) if isinstance(models, dict) else 'n/a'}",
+        )
+        add(
+            checks,
+            "training models shape",
+            status == 200
+            and _has_keys(models, {"models", "active", "inference"})
+            and isinstance(models.get("models"), list)
+            and _has_keys(models.get("inference"), {"running", "port", "missing_deps", "deps_ok"}),
+            f"status={status}",
         )
 
         status, scanned_models = client.request("POST", "/api/training/models/scan", {"roots": []})
