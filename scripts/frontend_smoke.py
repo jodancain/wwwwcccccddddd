@@ -40,6 +40,10 @@ def parse_json(raw: bytes) -> Any:
     return json.loads(raw.decode("utf-8"))
 
 
+def has_keys(value: Any, keys: set[str]) -> bool:
+    return isinstance(value, dict) and keys.issubset(value.keys())
+
+
 def websocket_url(frontend_url: str) -> str:
     parsed = urllib.parse.urlparse(frontend_url)
     scheme = "wss" if parsed.scheme == "https" else "ws"
@@ -164,6 +168,15 @@ def run(frontend_url: str) -> list[Check]:
         status == 200 and isinstance(conversations, list) and len(conversations) > 0,
         f"status={status} count={len(conversations) if isinstance(conversations, list) else 'n/a'}",
     )
+    add(
+        checks,
+        "api proxy conversation shape",
+        status == 200
+        and isinstance(conversations, list)
+        and bool(conversations)
+        and has_keys(conversations[0], {"talker", "nickname", "remark", "is_group", "msg_count", "last_time"}),
+        f"status={status}",
+    )
 
     if isinstance(conversations, list) and conversations:
         talker = conversations[0].get("talker", "")
@@ -175,6 +188,16 @@ def run(frontend_url: str) -> list[Check]:
             "api proxy messages",
             status == 200 and isinstance(messages, dict) and isinstance(messages.get("items"), list),
             f"status={status} items={len(messages.get('items', [])) if isinstance(messages, dict) else 'n/a'}",
+        )
+        first_message = messages.get("items", [{}])[0] if isinstance(messages, dict) and messages.get("items") else {}
+        add(
+            checks,
+            "api proxy message shape",
+            status == 200
+            and isinstance(messages, dict)
+            and has_keys(messages, {"items", "total", "page", "page_size"})
+            and has_keys(first_message, {"id", "talker", "content", "create_time", "type", "is_sender"}),
+            f"status={status}",
         )
 
     return checks
