@@ -62,6 +62,11 @@ def main() -> int:
             ROOT,
         ),
         (
+            "api contract",
+            [args.python, "scripts/api_contract.py"],
+            ROOT,
+        ),
+        (
             "backend smoke",
             backend_smoke_cmd,
             ROOT,

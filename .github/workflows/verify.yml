@@ -30,6 +30,9 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q backend/app scripts
 
+      - name: Check API contract
+        run: python scripts/api_contract.py
+
       - name: Install frontend dependencies
         run: npm ci
         working-directory: frontend
