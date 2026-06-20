@@ -216,6 +216,18 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                 status == 200 and isinstance(messages, dict) and "items" in messages,
                 f"status={status} items={len(messages.get('items', [])) if isinstance(messages, dict) else 'n/a'}",
             )
+            add(
+                checks,
+                "message page shape",
+                status == 200 and _message_page_shape(messages),
+                f"status={status}",
+            )
+
+            status, message_page_validation = client.request(
+                "GET",
+                f"/api/messages/?{query({'talker': talker, 'page': 0})}",
+            )
+            add(checks, "message page validation", status == 422, f"status={status}")
 
             status, dates = client.request("GET", f"/api/messages/dates?{query({'talker': talker})}")
             add(
@@ -237,6 +249,20 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                     status == 200 and isinstance(by_date, dict) and isinstance(by_date.get("items"), list),
                     f"status={status} items={len(by_date.get('items', [])) if isinstance(by_date, dict) else 'n/a'}",
                 )
+                add(
+                    checks,
+                    "messages by date shape",
+                    status == 200
+                    and isinstance(by_date, dict)
+                    and _has_keys(by_date, {"total", "offset", "items"}),
+                    f"status={status}",
+                )
+
+            status, by_date_validation = client.request(
+                "GET",
+                f"/api/messages/by-date?{query({'talker': talker, 'date': '2000-01-01', 'page_size': 0})}",
+            )
+            add(checks, "messages by date validation", status == 422, f"status={status}")
 
             status, recent = client.request("GET", f"/api/messages/recent?{query({'talker': talker, 'limit': 3})}")
             add(
@@ -245,6 +271,19 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                 status == 200 and isinstance(recent, list),
                 f"status={status} count={len(recent) if isinstance(recent, list) else 'n/a'}",
             )
+            first_recent = recent[0] if isinstance(recent, list) and recent else {}
+            add(
+                checks,
+                "recent messages shape",
+                status == 200 and isinstance(recent, list) and (not recent or _message_shape(first_recent)),
+                f"status={status}",
+            )
+
+            status, recent_validation = client.request(
+                "GET",
+                f"/api/messages/recent?{query({'talker': talker, 'limit': 0})}",
+            )
+            add(checks, "recent messages validation", status == 422, f"status={status}")
 
         status, contacts = client.request("GET", "/api/contacts/?limit=5")
         add(checks, "contacts list", status == 200 and isinstance(contacts, (list, dict)), f"status={status}")
@@ -274,6 +313,20 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             status == 200 and isinstance(group_contacts, list),
             f"status={status} count={len(group_contacts) if isinstance(group_contacts, list) else 'n/a'}",
         )
+
+        status, contacts_page = client.request("GET", "/api/contacts/?limit=1&offset=1")
+        add(
+            checks,
+            "contacts pagination",
+            status == 200 and isinstance(contacts_page, list) and len(contacts_page) <= 1,
+            f"status={status} count={len(contacts_page) if isinstance(contacts_page, list) else 'n/a'}",
+        )
+
+        status, contacts_validation = client.request("GET", "/api/contacts/?type=invalid&limit=1")
+        add(checks, "contacts type validation", status == 422, f"status={status}")
+
+        status, contacts_limit_validation = client.request("GET", "/api/contacts/?limit=0")
+        add(checks, "contacts limit validation", status == 422, f"status={status}")
 
         status, media = client.request("GET", "/api/media/image/999999999")
         add(checks, "media missing image", status == 404, f"status={status}")
