@@ -251,7 +251,13 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
         add(checks, "media missing image", status == 404, f"status={status}")
 
         status, send_validation = client.request("POST", "/api/send/text", {"contact_name": ""})
-        add(checks, "send validation", status == 422, f"status={status}")
+        add(checks, "send missing content validation", status == 422, f"status={status}")
+
+        status, send_validation = client.request("POST", "/api/send/text", {"contact_name": "  ", "content": "hello"})
+        add(checks, "send blank contact validation", status == 422, f"status={status}")
+
+        status, send_validation = client.request("POST", "/api/send/text", {"contact_name": "Codex", "content": "  "})
+        add(checks, "send blank content validation", status == 422, f"status={status}")
 
         status, settings = client.request("GET", "/api/settings/")
         add(checks, "settings", status == 200 and isinstance(settings, dict), f"status={status}")

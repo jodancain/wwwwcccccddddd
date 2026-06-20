@@ -1,6 +1,6 @@
 import asyncio
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from loguru import logger
 
 from app.wechat_sender.automator import WeChatAutomator
@@ -13,6 +13,13 @@ automator = WeChatAutomator()
 class SendTextRequest(BaseModel):
     contact_name: str
     content: str
+
+    @field_validator("contact_name", "content")
+    @classmethod
+    def reject_blank_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
 
 
 @router.post("/text")
