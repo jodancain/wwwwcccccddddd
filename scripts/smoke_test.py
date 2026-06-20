@@ -295,6 +295,27 @@ def run(base_url: str) -> list[Check]:
                 f"status={status} events={len(chat_events)}",
             )
 
+            status, summary_events = client.stream_events(
+                "/api/ai/global-summary/stream",
+                {"hours": 1, "message": "Codex smoke test: summarize recent chats briefly."},
+            )
+            summary_done = [event for event in summary_events if event.get("done")]
+            summary_session_id = ""
+            for event in reversed(summary_events):
+                if event.get("session_id"):
+                    summary_session_id = event["session_id"]
+                    break
+            if summary_session_id:
+                ai_session_ids.add(summary_session_id)
+            add(
+                checks,
+                "global summary stream",
+                status == 200
+                and any("chunk" in event for event in summary_events)
+                and bool(summary_done),
+                f"status={status} events={len(summary_events)}",
+            )
+
         status, sessions = client.request("GET", "/api/ai/sessions")
         add(
             checks,
