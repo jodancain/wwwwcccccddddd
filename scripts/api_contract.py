@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 API_DIR = ROOT / "backend" / "app" / "api"
-FRONTEND_API = ROOT / "frontend" / "src" / "api" / "index.ts"
+FRONTEND_SRC = ROOT / "frontend" / "src"
 
 ROUTER_RE = re.compile(r"(\w+)\s*=\s*APIRouter\(\s*prefix=[\"']([^\"']*)[\"']")
 ROUTE_RE = re.compile(r"@(\w+)\.(get|post|delete|put|patch)\(\s*[\"']([^\"']*)[\"']")
@@ -46,17 +46,23 @@ def collect_backend_routes() -> set[tuple[str, str]]:
 
 
 def collect_frontend_calls() -> set[tuple[str, str]]:
-    text = FRONTEND_API.read_text(encoding="utf-8")
     calls: set[tuple[str, str]] = set()
+    source_files = [
+        *FRONTEND_SRC.rglob("*.ts"),
+        *FRONTEND_SRC.rglob("*.vue"),
+    ]
 
-    for method, _quote, path in AXIOS_RE.findall(text):
-        calls.add(route_key(method, f"/api{path}"))
+    for source_file in sorted(source_files):
+        text = source_file.read_text(encoding="utf-8")
 
-    for _quote, path in FETCH_RE.findall(text):
-        calls.add(route_key("POST", path))
+        for method, _quote, path in AXIOS_RE.findall(text):
+            calls.add(route_key(method, f"/api{path}"))
 
-    for _quote, path in MEDIA_URL_RE.findall(text):
-        calls.add(route_key("GET", path))
+        for _quote, path in FETCH_RE.findall(text):
+            calls.add(route_key("POST", path))
+
+        for _quote, path in MEDIA_URL_RE.findall(text):
+            calls.add(route_key("GET", path))
 
     return calls
 
