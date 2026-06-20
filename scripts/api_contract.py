@@ -8,14 +8,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 API_DIR = ROOT / "backend" / "app" / "api"
+BACKEND_MAIN = ROOT / "backend" / "app" / "main.py"
 FRONTEND_SRC = ROOT / "frontend" / "src"
 
 ROUTER_RE = re.compile(r"(\w+)\s*=\s*APIRouter\(\s*prefix=[\"']([^\"']*)[\"']")
 ROUTE_RE = re.compile(r"@(\w+)\.(get|post|delete|put|patch)\(\s*[\"']([^\"']*)[\"']")
+WEBSOCKET_ROUTE_RE = re.compile(r"@app\.websocket\(\s*([`'\"])(.+?)\1")
 AXIOS_RE = re.compile(r"\bapi\.(get|post|delete|put|patch)\(\s*([`'\"])(.+?)\2", re.DOTALL)
 FETCH_RE = re.compile(r"\bfetch\(\s*([`'\"])(/api/.+?)\1\s*(?:,\s*(\{.*?\})\s*)?\)", re.DOTALL)
 FETCH_METHOD_RE = re.compile(r"\bmethod\s*:\s*([`'\"])(get|post|delete|put|patch)\1", re.IGNORECASE)
 MEDIA_URL_RE = re.compile(r"=>\s*([`'\"])(/api/media/image/.+?)\1")
+WEBSOCKET_RE = re.compile(r"\bnew\s+WebSocket\(\s*([`'\"])(.+?)\1", re.DOTALL)
 
 
 def clean_path(path: str) -> str:
@@ -50,6 +53,9 @@ def collect_backend_routes() -> set[tuple[str, str]]:
                 continue
             base = "" if router_name == "open_router" else "/api"
             routes.add(route_key(method, f"{base}{prefix}{suffix}"))
+    main_text = BACKEND_MAIN.read_text(encoding="utf-8")
+    for _quote, path in WEBSOCKET_ROUTE_RE.findall(main_text):
+        routes.add(route_key("WS", path))
     return routes
 
 
@@ -71,6 +77,10 @@ def collect_frontend_calls() -> set[tuple[str, str]]:
 
         for _quote, path in MEDIA_URL_RE.findall(text):
             calls.add(route_key("GET", path))
+
+        for _quote, path in WEBSOCKET_RE.findall(text):
+            if "/ws" in path:
+                calls.add(route_key("WS", "/ws"))
 
     return calls
 
