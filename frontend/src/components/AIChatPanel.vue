@@ -262,6 +262,10 @@
     </div>
 
     <div ref="aiMessagesRef" class="ai-messages">
+      <div v-if="aiChat.lastError.value" class="ai-error-banner">
+        {{ aiChat.lastError.value }}
+      </div>
+
       <div v-if="aiChat.messages.value.length === 0 && !aiChat.loading.value" class="ai-message assistant">
         <div class="ai-msg-role">AI 助手</div>
         <div class="ai-msg-content">

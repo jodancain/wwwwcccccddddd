@@ -78,6 +78,11 @@ def run(frontend_url: str) -> list[Check]:
             "api module",
             ["getConversations", "readSseJson", "aiChatStream", "globalSummaryStream", "generateSkillStream"],
         ),
+        (
+            "/src/composables/useAIChat.ts",
+            "ai chat composable",
+            ["lastError", "加载 AI 会话失败", "获取快捷回复失败", "streamingContent.value ||"],
+        ),
     ]
     for path, name, needles in component_expectations:
         status, content_type, raw = fetch(frontend_url, path)

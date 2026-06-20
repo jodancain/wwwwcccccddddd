@@ -24,13 +24,16 @@ export function useAIChat() {
   const loadingReplies = ref(false)
   const sessions = ref<AISession[]>([])
   const currentTalker = ref('')
+  const lastError = ref('')
 
   async function loadSessions(talker: string) {
     try {
       const data = await getAISessions(talker)
       sessions.value = data || []
-    } catch {
+      lastError.value = ''
+    } catch (err: any) {
       sessions.value = []
+      lastError.value = `加载 AI 会话失败：${err.message || err}`
     }
   }
 
@@ -43,8 +46,10 @@ export function useAIChat() {
         content: m.content,
         timestamp: new Date(m.created_at).getTime(),
       }))
-    } catch {
+      lastError.value = ''
+    } catch (err: any) {
       messages.value = []
+      lastError.value = `加载 AI 会话消息失败：${err.message || err}`
     }
   }
 
@@ -52,6 +57,7 @@ export function useAIChat() {
     currentTalker.value = talker
     quickReplies.value = []
     streamingContent.value = ''
+    lastError.value = ''
 
     // Load sessions for this talker
     await loadSessions(talker)
@@ -84,6 +90,7 @@ export function useAIChat() {
 
     loading.value = true
     streamingContent.value = ''
+    lastError.value = ''
 
     try {
       const stream = aiChatStream({
@@ -111,18 +118,20 @@ export function useAIChat() {
           if (talker) loadSessions(talker)
         }
         if (data.error) {
+          lastError.value = data.error
           messages.value.push({
             role: 'assistant',
-            content: `Error: ${data.error}`,
+            content: `出错了：${data.error}`,
             timestamp: Date.now(),
           })
           streamingContent.value = ''
         }
       }
     } catch (err: any) {
+      lastError.value = err.message || String(err)
       messages.value.push({
         role: 'assistant',
-        content: `Error: ${err.message}`,
+        content: streamingContent.value || `出错了：${lastError.value}`,
         timestamp: Date.now(),
       })
     } finally {
@@ -137,8 +146,10 @@ export function useAIChat() {
     try {
       const data = await suggestReplies(talker)
       quickReplies.value = data.replies || []
-    } catch {
+      lastError.value = ''
+    } catch (err: any) {
       quickReplies.value = []
+      lastError.value = `获取快捷回复失败：${err.message || err}`
     } finally {
       loadingReplies.value = false
     }
@@ -149,6 +160,7 @@ export function useAIChat() {
     sessionId,
     sessions,
     loading,
+    lastError,
     streamingContent,
     quickReplies,
     loadingReplies,

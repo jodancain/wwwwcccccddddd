@@ -234,6 +234,7 @@ html, body, #app { height: 100%; width: 100%; overflow: hidden;
 .ai-message.assistant .ai-msg-content code { background: #45475a; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
 .ai-message.assistant .ai-msg-content pre { background: #11111b; padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; }
 .ai-message.assistant .ai-msg-content pre code { background: none; padding: 0; }
+.ai-error-banner { margin-bottom: 12px; padding: 8px 10px; border: 1px solid rgba(243, 139, 168, 0.45); border-radius: 6px; background: rgba(243, 139, 168, 0.12); color: #f5c2e7; font-size: 12px; line-height: 1.4; }
 
 .ai-quick-actions { padding: 8px 16px; display: flex; gap: 6px; flex-wrap: wrap; }
 .quick-action-btn { padding: 6px 12px; background: #313244; color: var(--ai-accent); border: 1px solid #45475a; border-radius: 16px; font-size: 12px; cursor: pointer; transition: all 0.15s; }
