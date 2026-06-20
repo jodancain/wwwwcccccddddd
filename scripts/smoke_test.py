@@ -372,6 +372,41 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             f"status={status} found={len(scanned_models.get('found', [])) if isinstance(scanned_models, dict) else 'n/a'}",
         )
 
+        status, invalid_model_import = client.request(
+            "POST",
+            "/api/training/models/import",
+            {"path": "Z:/codex-smoke/missing-model", "model_type": "full"},
+        )
+        add(
+            checks,
+            "training model invalid import",
+            status == 400
+            and isinstance(invalid_model_import, dict)
+            and "detail" in invalid_model_import,
+            f"status={status}",
+        )
+
+        missing_model_id = "codex-smoke-missing-model"
+        status, missing_activate = client.request("POST", f"/api/training/models/{missing_model_id}/activate")
+        add(
+            checks,
+            "training model missing activate",
+            status == 404
+            and isinstance(missing_activate, dict)
+            and "detail" in missing_activate,
+            f"status={status}",
+        )
+
+        status, missing_delete = client.request("DELETE", f"/api/training/models/{missing_model_id}")
+        add(
+            checks,
+            "training model missing delete",
+            status == 404
+            and isinstance(missing_delete, dict)
+            and "detail" in missing_delete,
+            f"status={status}",
+        )
+
         if talker:
             status, my_reply = client.request("POST", "/api/training/my-reply", {"talker": talker})
             unavailable = "\u5206\u8eab\u6a21\u578b\u672a\u8fd0\u884c"
