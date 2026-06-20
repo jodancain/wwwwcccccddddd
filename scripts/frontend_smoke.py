@@ -123,11 +123,22 @@ def run(frontend_url: str) -> list[Check]:
             ["conversation-list", "conversation-item", "loadError", "result?.value"],
         ),
         ("/src/components/MessageThread.vue", "message component", ["message-thread", "date-jump-btn"]),
-        ("/src/components/AIChatPanel.vue", "ai panel component", ["ai-panel", "quick-action-btn"]),
+        (
+            "/src/components/AIChatPanel.vue",
+            "ai panel component",
+            ["ai-panel", "quick-action-btn", "doStartInference", "启动当前模型"],
+        ),
         (
             "/src/api/index.ts",
             "api module",
-            ["getConversations", "readSseJson", "aiChatStream", "globalSummaryStream", "generateSkillStream"],
+            [
+                "getConversations",
+                "readSseJson",
+                "aiChatStream",
+                "globalSummaryStream",
+                "generateSkillStream",
+                "startInferenceServer",
+            ],
         ),
         (
             "/src/composables/useAIChat.ts",
