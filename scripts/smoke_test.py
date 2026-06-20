@@ -146,6 +146,19 @@ def run(base_url: str) -> list[Check]:
                 f"status={status} count={len(dates) if isinstance(dates, list) else 'n/a'}",
             )
 
+            if status == 200 and isinstance(dates, list) and dates:
+                first_date = dates[0].get("date", "")
+                status, by_date = client.request(
+                    "GET",
+                    f"/api/messages/by-date?{query({'talker': talker, 'date': first_date, 'page_size': 5})}",
+                )
+                add(
+                    checks,
+                    "messages by date",
+                    status == 200 and isinstance(by_date, dict) and isinstance(by_date.get("items"), list),
+                    f"status={status} items={len(by_date.get('items', [])) if isinstance(by_date, dict) else 'n/a'}",
+                )
+
             status, recent = client.request("GET", f"/api/messages/recent?{query({'talker': talker, 'limit': 3})}")
             add(
                 checks,
@@ -156,6 +169,28 @@ def run(base_url: str) -> list[Check]:
 
         status, contacts = client.request("GET", "/api/contacts/?limit=5")
         add(checks, "contacts list", status == 200 and isinstance(contacts, (list, dict)), f"status={status}")
+
+        status, friend_contacts = client.request("GET", "/api/contacts/?type=friend&limit=3")
+        add(
+            checks,
+            "friend contacts filter",
+            status == 200 and isinstance(friend_contacts, list),
+            f"status={status} count={len(friend_contacts) if isinstance(friend_contacts, list) else 'n/a'}",
+        )
+
+        status, group_contacts = client.request("GET", "/api/contacts/?type=group&limit=3")
+        add(
+            checks,
+            "group contacts filter",
+            status == 200 and isinstance(group_contacts, list),
+            f"status={status} count={len(group_contacts) if isinstance(group_contacts, list) else 'n/a'}",
+        )
+
+        status, media = client.request("GET", "/api/media/image/999999999")
+        add(checks, "media missing image", status == 404, f"status={status}")
+
+        status, send_validation = client.request("POST", "/api/send/text", {"contact_name": ""})
+        add(checks, "send validation", status == 422, f"status={status}")
 
         status, settings = client.request("GET", "/api/settings/")
         add(checks, "settings", status == 200 and isinstance(settings, dict), f"status={status}")
@@ -239,6 +274,14 @@ def run(base_url: str) -> list[Check]:
             "training models",
             status == 200 and isinstance(models, dict) and "models" in models,
             f"status={status} count={len(models.get('models', [])) if isinstance(models, dict) else 'n/a'}",
+        )
+
+        status, scanned_models = client.request("POST", "/api/training/models/scan", {"roots": []})
+        add(
+            checks,
+            "training model scan",
+            status == 200 and isinstance(scanned_models, dict) and "found" in scanned_models,
+            f"status={status} found={len(scanned_models.get('found', [])) if isinstance(scanned_models, dict) else 'n/a'}",
         )
 
         if talker:
