@@ -45,6 +45,11 @@ def main() -> int:
 
     steps: list[tuple[str, list[str], Path]] = [
         (
+            "source health",
+            [args.python, "scripts/source_health.py"],
+            ROOT,
+        ),
+        (
             "python compile",
             [
                 args.python,
