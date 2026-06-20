@@ -215,10 +215,10 @@ html, body, #app { height: 100%; width: 100%; overflow: hidden;
 
 /* Session tabs */
 .ai-sessions-bar { display: flex; background: #181825; border-bottom: 1px solid #313244; padding: 0 12px; overflow: hidden; }
-.ai-sessions-scroll { display: flex; gap: 2px; overflow-x: auto; padding: 6px 0; }
+.ai-sessions-scroll { display: flex; flex: 1; min-width: 0; gap: 2px; overflow-x: auto; padding: 6px 0; }
 .ai-sessions-scroll::-webkit-scrollbar { height: 2px; }
 .ai-sessions-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); }
-.ai-session-tab { padding: 4px 10px; background: transparent; border: 1px solid transparent; border-radius: 4px; color: #6c7086; font-size: 11px; cursor: pointer; white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; transition: all 0.15s; }
+.ai-session-tab { flex: 0 0 auto; padding: 4px 10px; background: transparent; border: 1px solid transparent; border-radius: 4px; color: #6c7086; font-size: 11px; cursor: pointer; white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis; transition: all 0.15s; }
 .ai-session-tab:hover { color: #a6adc8; background: #313244; }
 .ai-session-tab.active { color: var(--ai-accent); background: #313244; border-color: #45475a; }
 
@@ -292,33 +292,47 @@ html, body, #app { height: 100%; width: 100%; overflow: hidden;
     width: 100% !important;
     min-width: 0;
     max-width: none;
-    height: 320px;
-    flex: 0 0 320px;
+    height: 300px;
+    flex: 0 0 300px;
   }
 
   .conversation-list {
-    width: 72px;
-    min-width: 72px;
+    width: clamp(188px, 42vw, 260px);
+    min-width: 188px;
   }
 
   .conversation-list-header {
-    padding: 10px 8px;
+    padding: 10px;
   }
 
-  .conversation-list-header h2,
-  .search-input,
-  .conv-info,
-  .conv-time {
-    display: none;
+  .conversation-list-header h2 {
+    font-size: 15px;
+    margin-bottom: 8px;
+  }
+
+  .search-input {
+    padding: 6px 10px;
+    font-size: 12px;
   }
 
   .conversation-item {
-    justify-content: center;
-    padding: 10px 8px;
+    padding: 10px;
   }
 
   .conv-avatar {
-    margin-right: 0;
+    width: 36px;
+    height: 36px;
+    margin-right: 8px;
+    font-size: 15px;
+  }
+
+  .conv-name {
+    font-size: 13px;
+  }
+
+  .conv-preview,
+  .conv-time {
+    font-size: 11px;
   }
 
   .thread-header {

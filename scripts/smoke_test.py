@@ -161,6 +161,7 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
     client = Client(base_url)
     checks: list[Check] = []
     created_api_id: str | None = None
+    created_mismatch_api_id: str | None = None
     created_skill_slug: str | None = None
     generated_skill_slug: str | None = None
     ai_session_ids: set[str] = set()
@@ -711,6 +712,37 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                     f"status={status}",
                 )
 
+                status, bearer_info = client.request(
+                    "GET",
+                    f"/open/v1/{created_api_id}/info",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                add(
+                    checks,
+                    "open api bearer auth",
+                    status == 200 and isinstance(bearer_info, dict) and bearer_info.get("talker") == talker,
+                    f"status={status}",
+                )
+
+                status, mismatch_api = client.request(
+                    "POST",
+                    "/api/chat-apis/create",
+                    {"talker": talker, "name": "Codex Mismatch API"},
+                )
+                if status == 200 and isinstance(mismatch_api, dict) and mismatch_api.get("id"):
+                    created_mismatch_api_id = mismatch_api["id"]
+                    status, forbidden = client.request("GET", f"/open/v1/{created_mismatch_api_id}/info?{auth_query}")
+                    add(
+                        checks,
+                        "open api key endpoint mismatch",
+                        status == 403
+                        and isinstance(forbidden, dict)
+                        and forbidden.get("detail") == "API key does not match this endpoint.",
+                        f"status={status}",
+                    )
+                else:
+                    add(checks, "open api key endpoint mismatch", False, f"status={status}")
+
                 status, messages = client.request(
                     "GET",
                     f"/open/v1/{created_api_id}/messages?{query({'api_key': api_key, 'page_size': 2})}",
@@ -770,6 +802,9 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                     f"status={status}",
                 )
     finally:
+        if created_mismatch_api_id:
+            status, _ = client.request("DELETE", f"/api/chat-apis/{created_mismatch_api_id}")
+            add(checks, "cleanup mismatch chat api", status == 200, f"status={status}")
         if created_api_id:
             status, _ = client.request("DELETE", f"/api/chat-apis/{created_api_id}")
             add(checks, "cleanup chat api", status == 200, f"status={status}")
