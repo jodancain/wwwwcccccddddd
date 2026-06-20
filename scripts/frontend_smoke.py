@@ -148,6 +148,19 @@ def run(frontend_url: str) -> list[Check]:
             f"status={status} content-type={content_type}",
         )
 
+    status, content_type, raw = fetch(frontend_url, "/src/styles/main.css")
+    styles = raw.decode("utf-8", errors="replace")
+    add(
+        checks,
+        "responsive layout guard",
+        status == 200
+        and ("text/css" in content_type or "javascript" in content_type)
+        and "clamp(188px, 42vw, 260px)" in styles
+        and "min-width: 188px" in styles
+        and ".ai-session-tab { flex: 0 0 auto;" in styles,
+        f"status={status} content-type={content_type}",
+    )
+
     status, content_type, raw = fetch(frontend_url, "/api/sync/status")
     sync = parse_json(raw)
     add(
