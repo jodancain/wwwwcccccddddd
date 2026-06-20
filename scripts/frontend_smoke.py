@@ -7,7 +7,11 @@ modules and that the frontend `/api` proxy can reach the backend.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import os
+import socket
+import ssl
 import sys
 import urllib.parse
 import urllib.request
@@ -34,6 +38,45 @@ def add(checks: list[Check], name: str, ok: bool, detail: str = "") -> None:
 
 def parse_json(raw: bytes) -> Any:
     return json.loads(raw.decode("utf-8"))
+
+
+def websocket_url(frontend_url: str) -> str:
+    parsed = urllib.parse.urlparse(frontend_url)
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    return urllib.parse.urlunparse((scheme, parsed.netloc, "/ws", "", "", ""))
+
+
+def websocket_probe(ws_url: str) -> tuple[bool, str]:
+    try:
+        parsed = urllib.parse.urlparse(ws_url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+        path = parsed.path or "/"
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        request = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}:{port}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "\r\n"
+        ).encode("ascii")
+
+        with socket.create_connection((host, port), timeout=10) as sock:
+            if parsed.scheme == "wss":
+                with ssl.create_default_context().wrap_socket(sock, server_hostname=host) as tls_sock:
+                    tls_sock.sendall(request)
+                    response = tls_sock.recv(1024).decode("ascii", errors="replace")
+            else:
+                sock.sendall(request)
+                response = sock.recv(1024).decode("ascii", errors="replace")
+
+        if " 101 " in response.splitlines()[0] and "upgrade: websocket" in response.lower():
+            return True, "connected"
+        return False, response.splitlines()[0] if response else "empty response"
+    except Exception as exc:
+        return False, str(exc)
 
 
 def run(frontend_url: str) -> list[Check]:
@@ -105,6 +148,9 @@ def run(frontend_url: str) -> list[Check]:
         status == 200 and isinstance(sync, dict) and sync.get("total_messages", 0) > 0,
         f"status={status} total={sync.get('total_messages') if isinstance(sync, dict) else 'n/a'}",
     )
+
+    ws_ok, ws_detail = websocket_probe(websocket_url(frontend_url))
+    add(checks, "websocket proxy", ws_ok, ws_detail)
 
     status, content_type, raw = fetch(frontend_url, "/api/messages/conversations")
     conversations = parse_json(raw)
