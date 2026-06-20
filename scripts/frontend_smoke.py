@@ -73,7 +73,11 @@ def run(frontend_url: str) -> list[Check]:
         ("/src/components/ConversationList.vue", "conversation component", ["conversation-list", "conversation-item"]),
         ("/src/components/MessageThread.vue", "message component", ["message-thread", "date-jump-btn"]),
         ("/src/components/AIChatPanel.vue", "ai panel component", ["ai-panel", "quick-action-btn"]),
-        ("/src/api/index.ts", "api module", ["getConversations", "aiChatStream", "globalSummaryStream"]),
+        (
+            "/src/api/index.ts",
+            "api module",
+            ["getConversations", "readSseJson", "aiChatStream", "globalSummaryStream", "generateSkillStream"],
+        ),
     ]
     for path, name, needles in component_expectations:
         status, content_type, raw = fetch(frontend_url, path)

@@ -5,6 +5,42 @@ const api = axios.create({
   timeout: 30000,
 })
 
+async function* readSseJson(response: Response) {
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    throw new Error(detail || `Stream request failed: ${response.status}`)
+  }
+  if (!response.body) {
+    throw new Error('Stream response body is empty')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  function* drain(text: string, flush = false) {
+    const lines = text.split('\n')
+    buffer = flush ? '' : (lines.pop() || '')
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try { yield JSON.parse(line.slice(6)) } catch {}
+      }
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    yield* drain(buffer)
+  }
+
+  buffer += decoder.decode()
+  if (buffer.trim()) {
+    yield* drain(buffer + '\n', true)
+  }
+}
+
 // Conversations
 export const getConversations = (search = '') =>
   api.get('/messages/conversations', { params: { search } }).then(r => r.data)
@@ -68,20 +104,8 @@ export async function* generateSkillStream(talker: string) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ talker }),
   })
-  const reader = response.body!.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        try { yield JSON.parse(line.slice(6)) } catch {}
-      }
-    }
+  for await (const event of readSseJson(response)) {
+    yield event
   }
 }
 
@@ -120,22 +144,8 @@ export async function* globalSummaryStream(data: { hours?: number; message?: str
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   })
-
-  const reader = response.body!.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        try { yield JSON.parse(line.slice(6)) } catch {}
-      }
-    }
+  for await (const event of readSseJson(response)) {
+    yield event
   }
 }
 
@@ -146,27 +156,8 @@ export async function* aiChatStream(data: { message: string; session_id?: string
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   })
-
-  const reader = response.body!.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        try {
-          const data = JSON.parse(line.slice(6))
-          yield data
-        } catch {}
-      }
-    }
+  for await (const event of readSseJson(response)) {
+    yield event
   }
 }
 
