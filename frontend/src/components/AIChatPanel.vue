@@ -169,6 +169,13 @@
           <div class="inference-url">{{ trainingStatus.inference_url }}</div>
           <button class="skill-btn activate" @click="useMyModel">切换为我的分身模式</button>
         </div>
+        <div v-else-if="activeModel && !modelMissingDeps.length" class="inference-status">
+          <div class="inference-badge">⚪ 当前模型未运行</div>
+          <div class="inference-url">{{ activeModel.name }}</div>
+          <button class="skill-btn activate" :disabled="!!modelBusyId" @click="doStartInference">
+            {{ modelBusyId === 'start-server' ? '启动中...' : '启动当前模型' }}
+          </button>
+        </div>
 
         <div class="model-manager">
           <div class="mm-header">
@@ -334,6 +341,7 @@ import {
   listSkills,
   myModelReply,
   scanModels,
+  startInferenceServer,
   startTraining,
   stopInferenceServer,
   stopTraining,
@@ -585,6 +593,19 @@ async function doStopInference() {
   await stopInferenceServer()
   await loadModels()
   trainingStatus.value = await getTrainingStatus()
+}
+
+async function doStartInference() {
+  modelBusyId.value = 'start-server'
+  try {
+    await startInferenceServer()
+    await loadModels()
+    trainingStatus.value = await getTrainingStatus()
+  } catch (err: any) {
+    alert(`启动失败：${err.response?.data?.detail || err.message}`)
+  } finally {
+    modelBusyId.value = ''
+  }
 }
 
 function startPollingTraining() {

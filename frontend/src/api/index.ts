@@ -88,6 +88,7 @@ export const activateModel = (modelId: string) =>
   api.post(`/training/models/${modelId}/activate`).then(r => r.data)
 export const deleteModel = (modelId: string) =>
   api.delete(`/training/models/${modelId}`).then(r => r.data)
+export const startInferenceServer = () => api.post('/training/start-server').then(r => r.data)
 export const stopInferenceServer = () => api.post('/training/stop-server').then(r => r.data)
 
 // Skills

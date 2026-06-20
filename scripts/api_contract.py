@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 API_DIR = ROOT / "backend" / "app" / "api"
 BACKEND_MAIN = ROOT / "backend" / "app" / "main.py"
 FRONTEND_SRC = ROOT / "frontend" / "src"
+SMOKE_TEST = ROOT / "scripts" / "smoke_test.py"
 
 ROUTER_RE = re.compile(r"(\w+)\s*=\s*APIRouter\(\s*prefix=[\"']([^\"']*)[\"']")
 ROUTE_RE = re.compile(r"@(\w+)\.(get|post|delete|put|patch)\(\s*[\"']([^\"']*)[\"']")
@@ -19,10 +20,18 @@ FETCH_RE = re.compile(r"\bfetch\(\s*([`'\"])(/api/.+?)\1\s*(?:,\s*(\{.*?\})\s*)?
 FETCH_METHOD_RE = re.compile(r"\bmethod\s*:\s*([`'\"])(get|post|delete|put|patch)\1", re.IGNORECASE)
 MEDIA_URL_RE = re.compile(r"=>\s*([`'\"])(/api/media/image/.+?)\1")
 WEBSOCKET_RE = re.compile(r"\bnew\s+WebSocket\(\s*([`'\"])(.+?)\1", re.DOTALL)
+SMOKE_REQUEST_RE = re.compile(
+    r"\bclient\.request\(\s*([`'\"])(get|post|delete|put|patch)\1\s*,\s*f?([`'\"])(.+?)\3",
+    re.IGNORECASE | re.DOTALL,
+)
+SMOKE_STREAM_RE = re.compile(r"\bclient\.stream_events\(\s*f?([`'\"])(.+?)\1", re.DOTALL)
 
 
 def clean_path(path: str) -> str:
-    path = re.sub(r"\$\{[^}]+\}", "{param}", path.strip())
+    path = path.strip()
+    path = path.split("?", 1)[0]
+    path = re.sub(r"\$\{[^}]+\}", "{param}", path)
+    path = re.sub(r"\{[^}:]+?\}", "{param}", path)
     path = re.sub(r"\s+", "", path)
     if not path.startswith("/"):
         path = "/" + path
@@ -85,9 +94,26 @@ def collect_frontend_calls() -> set[tuple[str, str]]:
     return calls
 
 
+def collect_smoke_calls() -> set[tuple[str, str]]:
+    text = SMOKE_TEST.read_text(encoding="utf-8")
+    calls: set[tuple[str, str]] = set()
+
+    for _quote, method, _path_quote, path in SMOKE_REQUEST_RE.findall(text):
+        calls.add(route_key(method, path))
+
+    for _quote, path in SMOKE_STREAM_RE.findall(text):
+        calls.add(route_key("POST", path))
+
+    if "websocket_url(base_url)" in text:
+        calls.add(route_key("WS", "/ws"))
+
+    return calls
+
+
 def main() -> int:
     backend_routes = collect_backend_routes()
     frontend_calls = collect_frontend_calls()
+    smoke_calls = collect_smoke_calls()
 
     missing = sorted(frontend_calls - backend_routes)
     if missing:
@@ -99,7 +125,18 @@ def main() -> int:
             print(f"- {method} {path}")
         return 1
 
-    print(f"API contract check passed: {len(frontend_calls)} frontend calls matched")
+    unverified = sorted(backend_routes - frontend_calls - smoke_calls)
+    if unverified:
+        print("API contract check failed. Backend routes are neither used by frontend nor covered by smoke tests:")
+        for method, path in unverified:
+            print(f"- {method} {path}")
+        return 1
+
+    print(
+        "API contract check passed: "
+        f"{len(frontend_calls)} frontend calls matched, "
+        f"{len(smoke_calls)} smoke calls covered"
+    )
     return 0
 
 
