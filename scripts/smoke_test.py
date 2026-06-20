@@ -105,6 +105,19 @@ def _has_keys(value: Any, keys: set[str]) -> bool:
     return isinstance(value, dict) and keys.issubset(value.keys())
 
 
+def _message_shape(value: Any) -> bool:
+    return _has_keys(value, {"id", "talker", "content", "create_time", "type", "is_sender"})
+
+
+def _message_page_shape(value: Any) -> bool:
+    first_message = value.get("items", [{}])[0] if isinstance(value, dict) and value.get("items") else {}
+    return (
+        _has_keys(value, {"items", "total", "page", "page_size"})
+        and isinstance(value.get("items"), list)
+        and (not value["items"] or _message_shape(first_message))
+    )
+
+
 def _websocket_probe(ws_url: str) -> tuple[bool, str]:
     try:
         parsed = urllib.parse.urlparse(ws_url)
@@ -595,6 +608,13 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                     status == 200 and isinstance(info, dict) and info.get("talker") == talker,
                     f"status={status}",
                 )
+                add(
+                    checks,
+                    "open api info shape",
+                    status == 200
+                    and _has_keys(info, {"talker", "name", "nickname", "remark", "is_group", "msg_count", "last_time"}),
+                    f"status={status}",
+                )
 
                 status, messages = client.request(
                     "GET",
@@ -606,6 +626,7 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                     status == 200 and isinstance(messages, dict) and isinstance(messages.get("items"), list),
                     f"status={status} items={len(messages.get('items', [])) if isinstance(messages, dict) else 'n/a'}",
                 )
+                add(checks, "open api messages shape", status == 200 and _message_page_shape(messages), f"status={status}")
 
                 recent_query = query({"api_key": api_key, "limit": 2})
                 status, recent = client.request("GET", f"/open/v1/{created_api_id}/messages/recent?{recent_query}")
@@ -614,6 +635,13 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                     "open api recent",
                     status == 200 and isinstance(recent, list),
                     f"status={status} count={len(recent) if isinstance(recent, list) else 'n/a'}",
+                )
+                first_recent = recent[0] if isinstance(recent, list) and recent else {}
+                add(
+                    checks,
+                    "open api recent shape",
+                    status == 200 and isinstance(recent, list) and (not recent or _message_shape(first_recent)),
+                    f"status={status}",
                 )
 
                 status, search = client.request(
@@ -626,6 +654,7 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                     status == 200 and isinstance(search, dict) and "items" in search,
                     f"status={status} items={len(search.get('items', [])) if isinstance(search, dict) else 'n/a'}",
                 )
+                add(checks, "open api search shape", status == 200 and _message_page_shape(search), f"status={status}")
 
                 status, toggled = client.request("POST", f"/api/chat-apis/{created_api_id}/toggle")
                 add(
