@@ -6,8 +6,12 @@ inside the existing backend venv without adding test dependencies.
 from __future__ import annotations
 
 import argparse
+import base64
+import os
 import json
+import socket
 import sys
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -93,6 +97,45 @@ def query(params: dict[str, Any]) -> str:
     return urllib.parse.urlencode(params)
 
 
+def _websocket_probe(ws_url: str) -> tuple[bool, str]:
+    try:
+        parsed = urllib.parse.urlparse(ws_url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+        path = parsed.path or "/"
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        request = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}:{port}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "\r\n"
+        ).encode("ascii")
+
+        with socket.create_connection((host, port), timeout=10) as sock:
+            if parsed.scheme == "wss":
+                with ssl.create_default_context().wrap_socket(sock, server_hostname=host) as tls_sock:
+                    tls_sock.sendall(request)
+                    response = tls_sock.recv(1024).decode("ascii", errors="replace")
+            else:
+                sock.sendall(request)
+                response = sock.recv(1024).decode("ascii", errors="replace")
+
+        if " 101 " in response.splitlines()[0] and "upgrade: websocket" in response.lower():
+            return True, "connected"
+        return False, response.splitlines()[0] if response else "empty response"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def websocket_url(base_url: str) -> str:
+    parsed = urllib.parse.urlparse(base_url)
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    return urllib.parse.urlunparse((scheme, parsed.netloc, "/ws", "", "", ""))
+
+
 def run(base_url: str) -> list[Check]:
     client = Client(base_url)
     checks: list[Check] = []
@@ -118,6 +161,9 @@ def run(base_url: str) -> list[Check]:
             status == 200 and isinstance(realtime, dict) and "running" in realtime,
             f"status={status} running={realtime.get('running') if isinstance(realtime, dict) else 'n/a'}",
         )
+
+        ws_ok, ws_detail = _websocket_probe(websocket_url(base_url))
+        add(checks, "websocket connect", ws_ok, ws_detail)
 
         status, conversations = client.request("GET", "/api/messages/conversations")
         if status == 200 and isinstance(conversations, list) and conversations:
