@@ -99,6 +99,7 @@ def run(base_url: str) -> list[Check]:
     created_api_id: str | None = None
     created_skill_slug: str | None = None
     generated_skill_slug: str | None = None
+    ai_session_ids: set[str] = set()
     talker = ""
 
     try:
@@ -169,6 +170,48 @@ def run(base_url: str) -> list[Check]:
                 "ai suggest replies",
                 status == 200 and isinstance(replies, dict) and len(replies.get("replies", [])) > 0,
                 f"status={status} replies={len(replies.get('replies', [])) if isinstance(replies, dict) else 'n/a'}",
+            )
+
+            status, chat = client.request(
+                "POST",
+                "/api/ai/chat",
+                {"talker": talker, "message": "Codex smoke test: summarize the latest context briefly."},
+            )
+            if status == 200 and isinstance(chat, dict) and chat.get("session_id"):
+                ai_session_ids.add(chat["session_id"])
+            add(
+                checks,
+                "ai chat fallback",
+                status == 200
+                and isinstance(chat, dict)
+                and bool(chat.get("session_id"))
+                and bool(chat.get("response")),
+                f"status={status}",
+            )
+
+            if status == 200 and isinstance(chat, dict) and chat.get("session_id"):
+                session_id = chat["session_id"]
+                status, session_messages = client.request("GET", f"/api/ai/sessions/{session_id}/messages")
+                add(
+                    checks,
+                    "ai session messages",
+                    status == 200 and isinstance(session_messages, list) and len(session_messages) >= 2,
+                    f"status={status} count={len(session_messages) if isinstance(session_messages, list) else 'n/a'}",
+                )
+
+            status, chat_events = client.stream_events(
+                "/api/ai/chat/stream",
+                {"talker": talker, "message": "Codex smoke stream test."},
+            )
+            stream_done = [event for event in chat_events if event.get("done")]
+            stream_session_id = stream_done[-1].get("session_id") if stream_done else ""
+            if stream_session_id:
+                ai_session_ids.add(stream_session_id)
+            add(
+                checks,
+                "ai chat stream fallback",
+                status == 200 and any("chunk" in event for event in chat_events) and bool(stream_session_id),
+                f"status={status} events={len(chat_events)}",
             )
 
         status, sessions = client.request("GET", "/api/ai/sessions")
@@ -330,6 +373,9 @@ def run(base_url: str) -> list[Check]:
         if created_skill_slug:
             status, _ = client.request("DELETE", f"/api/skills/{created_skill_slug}")
             add(checks, "cleanup skill", status == 200, f"status={status}")
+        for session_id in sorted(ai_session_ids):
+            status, _ = client.request("DELETE", f"/api/ai/sessions/{session_id}")
+            add(checks, f"cleanup ai session {session_id}", status == 200, f"status={status}")
 
     return checks
 

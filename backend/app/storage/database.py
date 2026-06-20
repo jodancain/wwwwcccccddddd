@@ -350,6 +350,12 @@ class AppDatabase:
         )
         return [dict(r) for r in rows]
 
+    async def delete_ai_session(self, session_id: str) -> bool:
+        await self._db.execute("DELETE FROM ai_messages WHERE session_id = ?", (session_id,))
+        cursor = await self._db.execute("DELETE FROM ai_sessions WHERE id = ?", (session_id,))
+        await self._db.commit()
+        return (cursor.rowcount or 0) > 0
+
     # --- Settings ---
 
     async def get_settings(self) -> dict[str, str]:

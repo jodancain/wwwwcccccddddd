@@ -209,3 +209,9 @@ async def get_ai_sessions(talker: str = ""):
 async def get_session_messages(session_id: str):
     db = await get_db()
     return await db.get_ai_messages(session_id)
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_ai_session(session_id: str):
+    db = await get_db()
+    return {"success": await db.delete_ai_session(session_id)}
