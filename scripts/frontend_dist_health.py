@@ -56,6 +56,36 @@ def main() -> int:
                 if secrets:
                     failures.append(f"{asset_path} has possible secret material: {', '.join(secrets)}")
 
+        js_text = "\n".join(
+            (DIST / path.lstrip("/")).read_text(encoding="utf-8", errors="replace")
+            for path in js_assets
+            if (DIST / path.lstrip("/")).exists()
+        )
+        css_text = "\n".join(
+            (DIST / path.lstrip("/")).read_text(encoding="utf-8", errors="replace")
+            for path in css_assets
+            if (DIST / path.lstrip("/")).exists()
+        )
+        expected_js_fragments = [
+            "/messages/conversations",
+            "/ai/chat/stream",
+            "/skills/generate/stream",
+            "/training/start-server",
+            "/training/stop-server",
+        ]
+        for fragment in expected_js_fragments:
+            if fragment not in js_text:
+                failures.append(f"dist JS is missing expected app endpoint: {fragment}")
+
+        expected_css_fragments = [
+            "clamp(188px,42vw,260px)",
+            "min-width:188px",
+            "flex:0 0 auto",
+        ]
+        for fragment in expected_css_fragments:
+            if fragment not in css_text:
+                failures.append(f"dist CSS is missing expected responsive rule: {fragment}")
+
     if failures:
         print("Frontend dist health check failed:")
         for failure in failures:
