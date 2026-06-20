@@ -41,6 +41,7 @@ class RealtimeListener:
         self._prev_sessions: dict[str, int] = {}  # username -> last_timestamp
         self._prev_wal_mtime: float = 0.0
         self._decryptor = None  # set lazily to avoid circular imports
+        self._last_snapshot_error = ""
         self.status = "idle"
         self.connected = False
         self.error = ""
@@ -149,9 +150,14 @@ class RealtimeListener:
                 try:
                     curr = self._snapshot_sessions(db_path, enc_key)
                 except Exception as e:  # noqa: BLE001
-                    logger.debug(f"snapshot_sessions failed: {e}")
+                    error_text = str(e)
+                    self.error = error_text
+                    if error_text != self._last_snapshot_error:
+                        logger.debug(f"snapshot_sessions failed: {error_text}")
+                        self._last_snapshot_error = error_text
                     time.sleep(self._POLL_INTERVAL * 2)
                     continue
+                self._last_snapshot_error = ""
 
                 if not self._prev_sessions:
                     self._prev_sessions = curr

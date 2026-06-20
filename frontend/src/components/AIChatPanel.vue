@@ -1,11 +1,10 @@
 <template>
   <div class="ai-panel-inner">
-    <!-- Header -->
     <div class="ai-panel-header">
       <h3>AI 助手</h3>
       <div class="ai-header-right">
-        <span v-if="activeSkill" class="ai-skill-badge" @click="showSkillPanel = true" :title="'Skill: ' + (activeSkill.name || activeSkill.slug)">
-          🎭 {{ activeSkill.name || activeSkill.slug }}
+        <span v-if="activeSkill" class="ai-skill-badge" @click="showSkillPanel = true" :title="activeSkill.name || activeSkill.slug">
+          🧩 {{ activeSkill.name || activeSkill.slug }}
         </span>
         <span v-if="currentTalker" class="ai-context-badge" :title="currentTalkerName">
           📎 {{ currentTalkerName }}
@@ -15,7 +14,6 @@
       </div>
     </div>
 
-    <!-- Session history tabs -->
     <div v-if="aiChat.sessions.value.length > 0" class="ai-sessions-bar">
       <div class="ai-sessions-scroll">
         <button
@@ -23,15 +21,14 @@
           :key="s.id"
           class="ai-session-tab"
           :class="{ active: s.id === aiChat.sessionId.value }"
+          :title="`${s.title || 'AI Chat'} · ${formatSessionTime(s.updated_at)}`"
           @click="onSwitchSession(s.id)"
-          :title="s.title + ' · ' + formatSessionTime(s.updated_at)"
         >
           {{ s.title || 'AI Chat' }}
         </button>
       </div>
     </div>
 
-    <!-- Quick Actions -->
     <div class="ai-quick-actions">
       <button class="quick-action-btn" @click="quickAction('帮我回复这条消息')">💬 帮我回复</button>
       <button class="quick-action-btn" @click="quickAction('总结一下最近的对话内容')">📝 总结对话</button>
@@ -39,11 +36,12 @@
       <button class="quick-action-btn" @click="fetchSuggestions">⚡ 快速回复</button>
       <button class="quick-action-btn global-summary-btn" @click="showGlobalPanel = true">🌐 总结全部聊天</button>
       <button class="quick-action-btn training-btn" @click="openTrainingPanel">🧠 训练我的分身</button>
-      <button v-if="currentTalker && trainingStatus?.inference_running" class="quick-action-btn clone-reply-btn" :disabled="cloneReplying" @click="doCloneReply">🤖 {{ cloneReplying ? '思考中...' : '分身帮我回复' }}</button>
+      <button v-if="currentTalker && trainingStatus?.inference_running" class="quick-action-btn clone-reply-btn" :disabled="cloneReplying" @click="doCloneReply">
+        🤖 {{ cloneReplying ? '思考中...' : '分身帮我回复' }}
+      </button>
       <button v-if="currentTalker" class="quick-action-btn skill-gen-btn" @click="startGenerateSkill">🎭 生成人物画像</button>
     </div>
 
-    <!-- Global Summary Panel -->
     <div v-if="showGlobalPanel" class="global-summary-overlay" @click.self="showGlobalPanel = false">
       <div class="global-summary-panel">
         <div class="gs-header">
@@ -51,7 +49,7 @@
           <button class="gs-close" @click="showGlobalPanel = false">&times;</button>
         </div>
         <div class="gs-options">
-          <label>时间范围：</label>
+          <label>时间范围</label>
           <select v-model="globalHours">
             <option :value="6">最近 6 小时</option>
             <option :value="12">最近 12 小时</option>
@@ -69,12 +67,11 @@
         <div v-if="globalResult" class="gs-result" v-html="renderContent(globalResult)"></div>
         <div v-if="globalLoading && !globalResult" class="gs-loading">
           <div class="streaming-indicator"><span></span><span></span><span></span></div>
-          <span>正在读取并分析所有聊天记录...</span>
+          <span>正在读取并分析聊天记录...</span>
         </div>
       </div>
     </div>
 
-    <!-- Skill Management Panel -->
     <div v-if="showSkillPanel" class="global-summary-overlay" @click.self="closeSkillPanel">
       <div class="global-summary-panel skill-panel">
         <div class="gs-header">
@@ -82,60 +79,54 @@
           <button class="gs-close" @click="closeSkillPanel">&times;</button>
         </div>
 
-        <!-- Skill Generation View -->
         <template v-if="skillGenerating || skillGenResult">
           <div class="skill-gen-header">
-            <span>🎭 正在为「{{ skillGenTargetName }}」生成人物画像</span>
+            <span>🎭 正在为“{{ skillGenTargetName }}”生成人物画像</span>
             <button v-if="!skillGenerating" class="skill-gen-back" @click="skillGenResult = ''">← 返回列表</button>
           </div>
-          <div class="gs-result skill-gen-result" v-if="skillGenResult" v-html="renderContent(skillGenResult)"></div>
+          <div v-if="skillGenResult" class="gs-result skill-gen-result" v-html="renderContent(skillGenResult)"></div>
           <div v-if="skillGenerating && !skillGenResult" class="gs-loading">
             <div class="streaming-indicator"><span></span><span></span><span></span></div>
-            <span>正在分析聊天记录，生成6层人物画像...</span>
+            <span>正在分析聊天记录...</span>
           </div>
         </template>
 
-        <!-- Normal View: Import + List -->
         <template v-else>
-          <!-- Import -->
           <div class="gs-options">
-            <input v-model="importUrl" class="gs-custom-input" placeholder="GitHub URL (如 https://github.com/user/skill-repo)" @keydown.enter="doImportSkill" />
+            <input v-model="importUrl" class="gs-custom-input" placeholder="GitHub URL" @keydown.enter="doImportSkill" />
             <button class="gs-run-btn" style="padding:6px 14px;font-size:12px;" :disabled="!importUrl.trim() || skillImporting" @click="doImportSkill">
-              {{ skillImporting ? '...' : '导入' }}
+              {{ skillImporting ? '导入中...' : '导入' }}
             </button>
           </div>
 
-          <!-- Skill list -->
           <div class="skill-list">
             <div v-if="skills.length === 0" class="skill-empty">
-              <div style="font-size: 32px; margin-bottom: 8px;">🎭</div>
+              <div style="font-size: 32px; margin-bottom: 8px;">🧩</div>
               <div>暂无 Skills</div>
-              <div style="font-size: 11px; color: #6c7086; margin-top: 4px;">从 GitHub 导入或从聊天记录生成</div>
+              <div style="font-size: 11px; color: #6c7086; margin-top: 4px;">可从 GitHub 导入，或从当前聊天生成</div>
             </div>
             <div v-for="s in skills" :key="s.slug" class="skill-card" :class="{ active: activeSkill?.slug === s.slug }">
               <div class="skill-card-info" @click="toggleSkillPreview(s.slug)">
-                <div class="skill-card-name">🎭 {{ s.name || s.slug }}</div>
+                <div class="skill-card-name">🧩 {{ s.name || s.slug }}</div>
                 <div class="skill-card-desc">{{ s.description || '人物画像' }}</div>
               </div>
               <div class="skill-card-actions">
                 <button v-if="activeSkill?.slug !== s.slug" class="skill-btn activate" @click="activateSkill(s)">激活</button>
-                <button v-else class="skill-btn deactivate" @click="deactivateSkill()">取消激活</button>
+                <button v-else class="skill-btn deactivate" @click="deactivateSkill">取消激活</button>
                 <button class="skill-btn delete" @click="doDeleteSkill(s.slug)">删除</button>
               </div>
             </div>
           </div>
 
-          <!-- Generate from current chat -->
           <div v-if="currentTalker" class="skill-generate-section">
             <button class="gs-run-btn skill-gen-full-btn" @click="startGenerateSkill">
-              🎭 为「{{ currentTalkerName }}」生成人物画像
+              🎭 为“{{ currentTalkerName }}”生成人物画像
             </button>
           </div>
         </template>
       </div>
     </div>
 
-    <!-- Training Panel -->
     <div v-if="showTrainingPanel" class="global-summary-overlay" @click.self="showTrainingPanel = false">
       <div class="global-summary-panel training-panel">
         <div class="gs-header">
@@ -143,19 +134,15 @@
           <button class="gs-close" @click="showTrainingPanel = false">&times;</button>
         </div>
 
-        <!-- Stats -->
-        <div class="training-stats" v-if="trainingStats">
+        <div v-if="trainingStats" class="training-stats">
           <div class="stat-row"><span>我的文本消息</span><strong>{{ trainingStats.my_text_messages?.toLocaleString() }}</strong></div>
           <div class="stat-row"><span>对话数</span><strong>{{ trainingStats.conversation_count }}</strong></div>
           <div class="stat-row"><span>训练数据</span><strong>{{ trainingStats.already_exported ? `已导出 (${trainingStats.file_size_mb}MB)` : '未导出' }}</strong></div>
         </div>
 
-        <!-- Progress -->
         <div v-if="trainingStatus && trainingStatus.stage !== 'idle'" class="training-progress">
           <div class="training-stage">
-            <span class="stage-icon" :class="trainingStatus.stage">
-              {{ stageIcon(trainingStatus.stage) }}
-            </span>
+            <span class="stage-icon" :class="trainingStatus.stage">{{ stageIcon(trainingStatus.stage) }}</span>
             <span class="stage-label">{{ stageLabel(trainingStatus.stage) }}</span>
           </div>
           <div class="progress-bar-container">
@@ -165,22 +152,11 @@
           <div v-if="trainingStatus.error" class="progress-error">{{ trainingStatus.error }}</div>
         </div>
 
-        <!-- Actions -->
         <div class="training-actions">
-          <template v-if="!trainingStatus || trainingStatus.stage === 'idle' || trainingStatus.stage === 'failed' || trainingStatus.stage === 'done'">
-            <button class="gs-run-btn training-start-btn" @click="doStartTraining">
-              🚀 一键训练（自动导出→训练→部署）
-            </button>
+          <template v-if="!trainingStatus || ['idle', 'failed', 'done'].includes(trainingStatus.stage)">
+            <button class="gs-run-btn training-start-btn" @click="doStartTraining">🚀 一键训练并部署</button>
             <div class="training-hint">
-              将自动：导出聊天数据 → 下载基座模型 → LoRA微调 → 部署API<br>
-              需要 GPU (16GB+ VRAM) 和约 1-3 小时
-            </div>
-          </template>
-          <template v-else-if="trainingStatus.stage === 'done'">
-            <div class="training-done">
-              <div class="done-icon">🎉</div>
-              <div>分身模型已部署!</div>
-              <div class="done-url">API: {{ trainingStatus.inference_url }}</div>
+              会自动导出聊天数据、训练 LoRA 并部署推理服务。需要 GPU 和较长时间。
             </div>
           </template>
           <template v-else>
@@ -188,59 +164,51 @@
           </template>
         </div>
 
-        <!-- If model is running -->
         <div v-if="trainingStatus?.inference_running" class="inference-status">
           <div class="inference-badge">🟢 分身模型运行中</div>
           <div class="inference-url">{{ trainingStatus.inference_url }}</div>
           <button class="skill-btn activate" @click="useMyModel">切换为我的分身模式</button>
         </div>
 
-        <!-- Model Manager -->
         <div class="model-manager">
           <div class="mm-header">
             <h4>📦 模型管理</h4>
             <div class="mm-header-actions">
               <button class="mm-small-btn" :disabled="scanning" @click="doScanModels">
-                {{ scanning ? '扫描中...' : '🔍 扫描本地模型' }}
+                {{ scanning ? '扫描中...' : '扫描本地模型' }}
               </button>
               <button class="mm-small-btn" @click="showImportForm = !showImportForm">
-                {{ showImportForm ? '取消' : '＋ 手动导入' }}
+                {{ showImportForm ? '取消' : '手动导入' }}
               </button>
               <button class="mm-small-btn" @click="loadModels">↻</button>
             </div>
           </div>
 
           <div v-if="modelMissingDeps.length" class="mm-deps-warn">
-            ⚠ 激活模型前需要先安装推理依赖：
-            <code>pip install {{ modelMissingDeps.join(' ') }}</code><br>
-            torch 建议去
-            <a href="https://pytorch.org" target="_blank">pytorch.org</a>
-            选择匹配你 GPU/CUDA 的版本。
+            激活模型前需要先安装推理依赖：
+            <code>pip install {{ modelMissingDeps.join(' ') }}</code>
           </div>
 
-          <!-- Manual import form -->
           <div v-if="showImportForm" class="mm-import-form">
             <div class="mm-form-row">
               <label>模型目录</label>
-              <input type="text" v-model="importForm.path"
-                     placeholder="D:\\WeChatAI_models\\my-lora" />
+              <input v-model="importForm.path" type="text" placeholder="D:\\WeChatAI_models\\my-lora" />
             </div>
             <div class="mm-form-row">
               <label>显示名称</label>
-              <input type="text" v-model="importForm.name" placeholder="可选" />
+              <input v-model="importForm.name" type="text" placeholder="可选" />
             </div>
             <div class="mm-form-row">
               <label>类型</label>
               <select v-model="importForm.model_type">
                 <option value="">自动识别</option>
-                <option value="full">完整模型 (HF)</option>
+                <option value="full">完整模型</option>
                 <option value="lora">LoRA 适配器</option>
               </select>
             </div>
             <div class="mm-form-row">
               <label>基座模型</label>
-              <input type="text" v-model="importForm.base_path"
-                     placeholder="仅 LoRA 需要；留空则读取 adapter_config.json" />
+              <input v-model="importForm.base_path" type="text" placeholder="LoRA 可选" />
             </div>
             <div v-if="importError" class="mm-error">{{ importError }}</div>
             <div class="mm-form-actions">
@@ -250,45 +218,34 @@
             </div>
           </div>
 
-          <!-- Registered models -->
           <div v-if="modelList.length" class="mm-list">
-            <div v-for="m in modelList" :key="m.id"
-                 class="mm-model" :class="{ active: m.is_active, missing: !m.path_exists || !m.base_exists }">
+            <div v-for="m in modelList" :key="m.id" class="mm-model" :class="{ active: m.is_active, missing: !m.path_exists || !m.base_exists }">
               <div class="mm-model-top">
                 <span class="mm-badge" :class="m.type">{{ m.type === 'lora' ? 'LoRA' : 'FULL' }}</span>
                 <span class="mm-name">{{ m.name }}</span>
-                <span v-if="m.is_active" class="mm-active-tag">● 当前使用</span>
+                <span v-if="m.is_active" class="mm-active-tag">当前使用</span>
               </div>
               <div class="mm-path" :title="m.path">{{ m.path }}</div>
-              <div v-if="m.type === 'lora' && m.base_path" class="mm-path" :title="m.base_path">
-                基座: {{ m.base_path }}
-              </div>
-              <div v-if="!m.path_exists" class="mm-warn">⚠ 路径不存在</div>
-              <div v-else-if="m.type === 'lora' && !m.base_exists" class="mm-warn">⚠ 基座模型不存在</div>
+              <div v-if="m.type === 'lora' && m.base_path" class="mm-path" :title="m.base_path">基座: {{ m.base_path }}</div>
+              <div v-if="!m.path_exists" class="mm-warn">路径不存在</div>
+              <div v-else-if="m.type === 'lora' && !m.base_exists" class="mm-warn">基座模型不存在</div>
               <div class="mm-actions">
-                <button class="mm-small-btn"
-                        :disabled="!!modelBusyId || !m.path_exists || (m.type === 'lora' && !m.base_exists) || (m.is_active && modelInferenceRunning)"
-                        @click="doActivateModel(m)">
-                  {{ modelBusyId === m.id
-                      ? '加载中...'
-                      : (m.is_active && modelInferenceRunning
-                          ? '运行中'
-                          : (m.is_active ? '重新启动' : '激活')) }}
+                <button
+                  class="mm-small-btn"
+                  :disabled="!!modelBusyId || !m.path_exists || (m.type === 'lora' && !m.base_exists) || (m.is_active && modelInferenceRunning)"
+                  @click="doActivateModel(m)"
+                >
+                  {{ modelBusyId === m.id ? '加载中...' : (m.is_active && modelInferenceRunning ? '运行中' : (m.is_active ? '重新启动' : '激活')) }}
                 </button>
-                <button v-if="m.is_active && modelInferenceRunning" class="mm-small-btn danger" @click="doStopInference">
-                  ⏹ 停止
-                </button>
+                <button v-if="m.is_active && modelInferenceRunning" class="mm-small-btn danger" @click="doStopInference">停止</button>
                 <button class="mm-small-btn ghost" @click="doDeleteModel(m)">移除</button>
               </div>
             </div>
           </div>
-          <div v-else class="mm-empty">
-            还没有导入任何模型。点击「扫描本地模型」自动发现 <code>D:/WeChatAI_models/</code> 下的模型，或手动导入。
-          </div>
+          <div v-else class="mm-empty">还没有导入任何模型。可以扫描本地模型或手动导入。</div>
 
-          <!-- Scan results -->
           <div v-if="scanResults.length" class="mm-scan-results">
-            <div class="mm-scan-title">🔍 扫描结果 ({{ scanResults.length }})</div>
+            <div class="mm-scan-title">扫描结果 ({{ scanResults.length }})</div>
             <div v-for="s in scanResults" :key="s.path" class="mm-scan-item">
               <div class="mm-scan-main">
                 <span class="mm-badge" :class="s.type">{{ s.type === 'lora' ? 'LoRA' : 'FULL' }}</span>
@@ -296,8 +253,7 @@
               </div>
               <div class="mm-path" :title="s.path">{{ s.path }}</div>
               <div v-if="s.base_path" class="mm-path">基座: {{ s.base_path }}</div>
-              <button v-if="!s.registered" class="mm-small-btn" :disabled="importBusy"
-                      @click="doImportScanned(s)">导入</button>
+              <button v-if="!s.registered" class="mm-small-btn" :disabled="importBusy" @click="doImportScanned(s)">导入</button>
               <span v-else class="mm-registered-tag">已导入</span>
             </div>
           </div>
@@ -305,9 +261,7 @@
       </div>
     </div>
 
-    <!-- Messages -->
     <div ref="aiMessagesRef" class="ai-messages">
-      <!-- Welcome -->
       <div v-if="aiChat.messages.value.length === 0 && !aiChat.loading.value" class="ai-message assistant">
         <div class="ai-msg-role">AI 助手</div>
         <div class="ai-msg-content">
@@ -316,23 +270,16 @@
         </div>
       </div>
 
-      <div
-        v-for="(msg, i) in aiChat.messages.value"
-        :key="i"
-        class="ai-message"
-        :class="msg.role"
-      >
+      <div v-for="(msg, i) in aiChat.messages.value" :key="i" class="ai-message" :class="msg.role">
         <div class="ai-msg-role">{{ msg.role === 'user' ? '我' : 'AI 助手' }}</div>
         <div class="ai-msg-content" v-html="renderContent(msg.content)"></div>
       </div>
 
-      <!-- Streaming -->
       <div v-if="aiChat.streamingContent.value" class="ai-message assistant">
         <div class="ai-msg-role">AI 助手</div>
         <div class="ai-msg-content" v-html="renderContent(aiChat.streamingContent.value)"></div>
       </div>
 
-      <!-- Loading -->
       <div v-if="aiChat.loading.value && !aiChat.streamingContent.value" class="ai-message assistant">
         <div class="ai-msg-role">AI 助手</div>
         <div class="ai-msg-content">
@@ -341,7 +288,6 @@
       </div>
     </div>
 
-    <!-- Quick Replies -->
     <div v-if="aiChat.quickReplies.value.length > 0" class="quick-replies">
       <div class="quick-replies-title">AI 推荐回复</div>
       <div v-for="(reply, i) in aiChat.quickReplies.value" :key="i" class="quick-reply-card">
@@ -353,7 +299,6 @@
       </div>
     </div>
 
-    <!-- Input -->
     <div class="ai-input-area">
       <div class="ai-input-row">
         <textarea
@@ -362,21 +307,34 @@
           rows="2"
           @keydown.enter.exact.prevent="handleSend"
         ></textarea>
-        <button
-          class="ai-send-btn"
-          :disabled="!inputText.trim() || aiChat.loading.value"
-          @click="handleSend"
-        >发送</button>
+        <button class="ai-send-btn" :disabled="!inputText.trim() || aiChat.loading.value" @click="handleSend">发送</button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted } from 'vue'
-import { useAIChat } from '../composables/useAIChat'
-import { globalSummaryStream, listSkills, importSkill, deleteSkill as apiDeleteSkill, generateSkillStream, getTrainingStats, getTrainingStatus, startTraining, stopTraining, myModelReply, listModels, scanModels, importModel, activateModel, deleteModel, stopInferenceServer } from '../api'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
+import { useAIChat } from '../composables/useAIChat'
+import {
+  activateModel,
+  deleteModel,
+  generateSkillStream,
+  getTrainingStats,
+  getTrainingStatus,
+  globalSummaryStream,
+  importModel,
+  importSkill,
+  listModels,
+  listSkills,
+  myModelReply,
+  scanModels,
+  startTraining,
+  stopInferenceServer,
+  stopTraining,
+  deleteSkill as apiDeleteSkill,
+} from '../api'
 
 const props = defineProps<{
   currentTalker: string
@@ -389,14 +347,12 @@ const aiChat = useAIChat()
 const inputText = ref('')
 const aiMessagesRef = ref<HTMLElement | null>(null)
 
-// Global summary
 const showGlobalPanel = ref(false)
 const globalHours = ref(24)
 const globalCustomMsg = ref('')
 const globalLoading = ref(false)
 const globalResult = ref('')
 
-// Skills
 const showSkillPanel = ref(false)
 const skills = ref<any[]>([])
 const activeSkill = ref<any>(null)
@@ -406,20 +362,18 @@ const skillGenerating = ref(false)
 const skillGenResult = ref('')
 const skillGenTargetName = ref('')
 
-// Training
 const showTrainingPanel = ref(false)
 const trainingStats = ref<any>(null)
 const trainingStatus = ref<any>(null)
-let trainingPollTimer: any = null
+let trainingPollTimer: number | null = null
 
-// === Model manager state ===
 const modelList = ref<any[]>([])
 const activeModel = ref<any>(null)
 const modelInferenceRunning = ref(false)
 const modelMissingDeps = ref<string[]>([])
 const scanResults = ref<any[]>([])
 const scanning = ref(false)
-const modelBusyId = ref<string>('')
+const modelBusyId = ref('')
 const importForm = ref({ path: '', name: '', base_path: '', model_type: '' })
 const importError = ref('')
 const importBusy = ref(false)
@@ -427,28 +381,27 @@ const showImportForm = ref(false)
 const cloneReplying = ref(false)
 
 function renderContent(content: string) {
-  try { return marked.parse(content, { breaks: true }) } catch { return content }
+  return marked.parse(content || '')
 }
 
 function handleSend() {
   const text = inputText.value.trim()
-  if (!text || aiChat.loading.value) return
+  if (!text) return
   inputText.value = ''
   aiChat.sendMessage(text, props.currentTalker, activeSkill.value?.slug || '')
-  scrollToBottom()
 }
 
 function quickAction(prompt: string) {
-  if (aiChat.loading.value) return
   aiChat.sendMessage(prompt, props.currentTalker, activeSkill.value?.slug || '')
-  scrollToBottom()
 }
 
 function fetchSuggestions() {
   if (props.currentTalker) aiChat.fetchSuggestions(props.currentTalker)
 }
 
-function copyReply(text: string) { navigator.clipboard.writeText(text) }
+function copyReply(text: string) {
+  navigator.clipboard?.writeText(text)
+}
 
 function scrollToBottom() {
   nextTick(() => {
@@ -456,30 +409,29 @@ function scrollToBottom() {
   })
 }
 
-function onNewChat() { aiChat.startNewSession() }
+function onNewChat() {
+  aiChat.startNewSession()
+}
 
-// === Global Summary ===
 async function runGlobalSummary() {
-  if (globalLoading.value) return
   globalLoading.value = true
   globalResult.value = ''
   try {
-    const stream = globalSummaryStream({ hours: globalHours.value, message: globalCustomMsg.value || undefined })
-    for await (const data of stream) {
+    for await (const data of globalSummaryStream({ hours: globalHours.value, message: globalCustomMsg.value || undefined })) {
       if (data.chunk) globalResult.value += data.chunk
-      if (data.error) globalResult.value += `\n\nError: ${data.error}`
     }
-  } catch (err: any) { globalResult.value = `Error: ${err.message}` }
-  finally { globalLoading.value = false }
+  } catch (err: any) {
+    globalResult.value = `总结失败：${err.message || err}`
+  } finally {
+    globalLoading.value = false
+  }
 }
 
-// === Skill functions ===
 async function loadSkills() {
   try { skills.value = await listSkills() } catch { skills.value = [] }
 }
 
 function openSkillPanel() {
-  skillGenResult.value = ''
   showSkillPanel.value = true
   loadSkills()
 }
@@ -487,77 +439,78 @@ function openSkillPanel() {
 function closeSkillPanel() {
   showSkillPanel.value = false
   skillGenResult.value = ''
+  skillGenerating.value = false
 }
 
 function activateSkill(skill: any) {
   activeSkill.value = skill
-  showSkillPanel.value = false
 }
 
-function deactivateSkill() { activeSkill.value = null }
+function deactivateSkill() {
+  activeSkill.value = null
+}
 
-function toggleSkillPreview(slug: string) {
-  // Could preview skill content in future
+async function toggleSkillPreview(slug: string) {
+  console.log('preview skill', slug)
 }
 
 async function doImportSkill() {
-  if (!importUrl.value.trim() || skillImporting.value) return
+  if (!importUrl.value.trim()) return
   skillImporting.value = true
   try {
-    const result = await importSkill(importUrl.value.trim())
-    if (result.error) { alert('导入失败: ' + result.error); return }
+    await importSkill(importUrl.value.trim())
     importUrl.value = ''
     await loadSkills()
-  } catch (err: any) { alert('导入失败: ' + err.message) }
-  finally { skillImporting.value = false }
+  } catch (err: any) {
+    alert(`导入失败：${err.response?.data?.detail || err.message}`)
+  } finally {
+    skillImporting.value = false
+  }
 }
 
 async function doDeleteSkill(slug: string) {
-  if (!confirm(`确认删除 skill "${slug}"？`)) return
-  try {
-    await apiDeleteSkill(slug)
-    if (activeSkill.value?.slug === slug) activeSkill.value = null
-    await loadSkills()
-  } catch {}
+  if (!confirm('确认删除这个 Skill？')) return
+  await apiDeleteSkill(slug)
+  if (activeSkill.value?.slug === slug) activeSkill.value = null
+  await loadSkills()
 }
 
 async function startGenerateSkill() {
-  if (!props.currentTalker || skillGenerating.value) return
-  skillGenTargetName.value = props.currentTalkerName
+  if (!props.currentTalker) return
+  showSkillPanel.value = true
   skillGenerating.value = true
   skillGenResult.value = ''
-  showSkillPanel.value = true
+  skillGenTargetName.value = props.currentTalkerName || props.currentTalker
   try {
-    const stream = generateSkillStream(props.currentTalker)
-    for await (const data of stream) {
+    for await (const data of generateSkillStream(props.currentTalker)) {
       if (data.chunk) skillGenResult.value += data.chunk
-      if (data.done) { await loadSkills() }
-      if (data.error) skillGenResult.value += `\n\nError: ${data.error}`
+      if (data.error) skillGenResult.value += `\n\n生成失败：${data.error}`
     }
-  } catch (err: any) { skillGenResult.value = `Error: ${err.message}` }
-  finally { skillGenerating.value = false }
+    await loadSkills()
+  } catch (err: any) {
+    skillGenResult.value = `生成失败：${err.message || err}`
+  } finally {
+    skillGenerating.value = false
+  }
 }
 
-// === Training functions ===
 async function openTrainingPanel() {
   showTrainingPanel.value = true
-  try { trainingStats.value = await getTrainingStats() } catch {}
-  try { trainingStatus.value = await getTrainingStatus() } catch {}
-  loadModels()
-  startPollingTraining()
+  try {
+    trainingStats.value = await getTrainingStats()
+    trainingStatus.value = await getTrainingStatus()
+    await loadModels()
+  } catch (err) {
+    console.error(err)
+  }
 }
 
-// === Model manager functions ===
 async function loadModels() {
-  try {
-    const data = await listModels()
-    modelList.value = data.models || []
-    activeModel.value = data.active || null
-    modelInferenceRunning.value = !!(data.inference && data.inference.running)
-    modelMissingDeps.value = (data.inference && data.inference.missing_deps) || []
-  } catch (err: any) {
-    console.error('loadModels', err)
-  }
+  const data = await listModels()
+  modelList.value = data.models || []
+  activeModel.value = data.active || null
+  modelInferenceRunning.value = !!data.inference?.running
+  modelMissingDeps.value = data.inference?.missing_deps || []
 }
 
 async function doScanModels() {
@@ -565,125 +518,101 @@ async function doScanModels() {
   try {
     const data = await scanModels()
     scanResults.value = data.found || []
-  } catch (err: any) {
-    alert('扫描失败: ' + (err?.response?.data?.detail || err.message))
   } finally {
     scanning.value = false
   }
 }
 
 async function doImportScanned(entry: any) {
-  if (entry.registered) return
   importBusy.value = true
   try {
     await importModel({
       path: entry.path,
       name: entry.name,
       base_path: entry.base_path || '',
-      model_type: entry.type,
+      model_type: entry.type || '',
     })
     await loadModels()
     await doScanModels()
-  } catch (err: any) {
-    alert('导入失败: ' + (err?.response?.data?.detail || err.message))
   } finally {
     importBusy.value = false
   }
 }
 
 async function doImportManual() {
-  importError.value = ''
   if (!importForm.value.path.trim()) {
-    importError.value = '请输入模型目录路径'
+    importError.value = '请输入模型目录。'
     return
   }
   importBusy.value = true
+  importError.value = ''
   try {
-    await importModel({
-      path: importForm.value.path.trim(),
-      name: importForm.value.name.trim(),
-      base_path: importForm.value.base_path.trim(),
-      model_type: importForm.value.model_type || '',
-    })
+    await importModel(importForm.value)
     importForm.value = { path: '', name: '', base_path: '', model_type: '' }
     showImportForm.value = false
     await loadModels()
   } catch (err: any) {
-    importError.value = err?.response?.data?.detail || err.message || '导入失败'
+    importError.value = err.response?.data?.detail || err.message || String(err)
   } finally {
     importBusy.value = false
   }
 }
 
 async function doActivateModel(m: any) {
-  if (modelBusyId.value) return
   modelBusyId.value = m.id
   try {
     await activateModel(m.id)
     await loadModels()
-    // After activation the inference server is booting; trainingStatus will
-    // reflect inference_running once it's ready.
-    try { trainingStatus.value = await getTrainingStatus() } catch {}
+    trainingStatus.value = await getTrainingStatus()
   } catch (err: any) {
-    alert('激活失败: ' + (err?.response?.data?.detail || err.message))
+    alert(`激活失败：${err.response?.data?.detail || err.message}`)
   } finally {
     modelBusyId.value = ''
   }
 }
 
 async function doDeleteModel(m: any) {
-  if (!confirm(`确认从列表中移除 "${m.name}"？（磁盘文件不会被删除）`)) return
-  try {
-    await deleteModel(m.id)
-    await loadModels()
-  } catch (err: any) {
-    alert('删除失败: ' + (err?.response?.data?.detail || err.message))
-  }
+  if (!confirm(`确认移除模型“${m.name}”？不会删除磁盘文件。`)) return
+  await deleteModel(m.id)
+  await loadModels()
 }
 
 async function doStopInference() {
-  try {
-    await stopInferenceServer()
-    await loadModels()
-    try { trainingStatus.value = await getTrainingStatus() } catch {}
-  } catch (err: any) {
-    alert('停止失败: ' + (err?.response?.data?.detail || err.message))
-  }
+  await stopInferenceServer()
+  await loadModels()
+  trainingStatus.value = await getTrainingStatus()
 }
 
 function startPollingTraining() {
   stopPollingTraining()
-  trainingPollTimer = setInterval(async () => {
-    try {
-      trainingStatus.value = await getTrainingStatus()
-      if (trainingStatus.value?.stage === 'done' || trainingStatus.value?.stage === 'idle' || trainingStatus.value?.stage === 'failed') {
-        stopPollingTraining()
-      }
-    } catch {}
-  }, 3000)
+  trainingPollTimer = window.setInterval(async () => {
+    trainingStatus.value = await getTrainingStatus()
+    if (['idle', 'done', 'failed'].includes(trainingStatus.value?.stage)) stopPollingTraining()
+  }, 2500)
 }
 
 function stopPollingTraining() {
-  if (trainingPollTimer) { clearInterval(trainingPollTimer); trainingPollTimer = null }
+  if (trainingPollTimer) window.clearInterval(trainingPollTimer)
+  trainingPollTimer = null
 }
 
 async function doStartTraining() {
-  try {
-    await startTraining()
-    trainingStatus.value = await getTrainingStatus()
-    startPollingTraining()
-  } catch (err: any) { alert('启动失败: ' + err.message) }
+  trainingStatus.value = (await startTraining()).status
+  startPollingTraining()
 }
 
 async function doStopTraining() {
-  try { await stopTraining(); trainingStatus.value = await getTrainingStatus() } catch {}
+  await stopTraining()
+  trainingStatus.value = await getTrainingStatus()
+  stopPollingTraining()
 }
 
 function useMyModel() {
-  if (trainingStatus.value?.inference_url) {
-    alert(`分身模型已激活!\n\n请在 .env 中设置:\nAI_PROVIDER=openai\nOPENAI_BASE_URL=${trainingStatus.value.inference_url}\nOPENAI_MODEL=my-style\n\n然后重启后端即可使用分身模式。`)
+  activeSkill.value = {
+    slug: '__my_model__',
+    name: '我的分身',
+    description: '使用本地微调模型回复',
   }
-  showTrainingPanel.value = false
 }
 
 async function doCloneReply() {
@@ -691,25 +620,17 @@ async function doCloneReply() {
   cloneReplying.value = true
   try {
     const result = await myModelReply(props.currentTalker)
-    if (result.error) {
-      // Show error in AI chat
-      aiChat.messages.value.push({ role: 'assistant', content: `❌ ${result.error}`, timestamp: Date.now() })
-    } else if (result.reply) {
-      // Show the reply in AI chat and offer to send
-      aiChat.messages.value.push({
-        role: 'user', content: '🤖 分身帮我回复', timestamp: Date.now(),
-      })
-      aiChat.messages.value.push({
-        role: 'assistant',
-        content: `**🤖 分身生成的回复：**\n\n> ${result.reply}\n\n点击下方"发送"可将此回复发送到微信。`,
-        timestamp: Date.now(),
-      })
-      // Add to quick replies for easy sending
-      aiChat.quickReplies.value = [result.reply]
-    }
-    scrollToBottom()
+    aiChat.messages.value.push({
+      role: 'assistant',
+      content: result.reply || `❌ ${result.error || '分身没有返回内容'}`,
+      timestamp: Date.now(),
+    })
   } catch (err: any) {
-    aiChat.messages.value.push({ role: 'assistant', content: `❌ 调用失败: ${err.message}`, timestamp: Date.now() })
+    aiChat.messages.value.push({
+      role: 'assistant',
+      content: `❌ 调用失败：${err.message || err}`,
+      timestamp: Date.now(),
+    })
   } finally {
     cloneReplying.value = false
   }
@@ -717,42 +638,45 @@ async function doCloneReply() {
 
 function stageIcon(stage: string) {
   const icons: Record<string, string> = {
-    exporting: '📦', downloading: '⬇️', training: '🔥',
-    merging: '🔗', starting_server: '🚀', done: '✅', failed: '❌',
+    exporting: '📤',
+    downloading: '⬇️',
+    training: '🏋️',
+    deploying: '🚀',
+    done: '✅',
+    failed: '❌',
   }
   return icons[stage] || '⏳'
 }
 
 function stageLabel(stage: string) {
   const labels: Record<string, string> = {
-    exporting: '导出数据', downloading: '下载模型', training: '训练中',
-    merging: '合并模型', starting_server: '启动服务', done: '完成', failed: '失败',
+    idle: '空闲',
+    exporting: '导出数据',
+    downloading: '下载模型',
+    training: '训练中',
+    deploying: '部署中',
+    done: '完成',
+    failed: '失败',
   }
   return labels[stage] || stage
 }
 
-onMounted(() => {
-  loadSkills()
-  // Check if personal model is running
-  getTrainingStatus().then(s => { trainingStatus.value = s }).catch(() => {})
-})
-
 function onSwitchSession(sid: string) {
   aiChat.loadSession(sid)
-  nextTick(scrollToBottom)
 }
 
 function formatSessionTime(dt: string) {
-  if (!dt) return ''
   const d = new Date(dt)
-  return `${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
-// Watch for conversation changes
 watch(() => props.currentTalker, (talker) => {
-  if (talker) { aiChat.switchToTalker(talker); nextTick(scrollToBottom) }
-})
+  aiChat.switchToTalker(talker)
+}, { immediate: true })
 
-// Auto-scroll on new messages
 watch(() => [aiChat.messages.value.length, aiChat.streamingContent.value], () => scrollToBottom())
+
+onMounted(() => {
+  loadSkills()
+})
 </script>

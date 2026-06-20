@@ -11,6 +11,11 @@ const backendWsUrl = backendUrl.replace(/^http/, 'ws')
 
 export default defineConfig({
   plugins: [vue()],
+  build: {
+    rollupOptions: {
+      input: 'index.html',
+    },
+  },
   server: {
     port: 5175,
     host: '0.0.0.0',
