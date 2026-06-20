@@ -376,6 +376,16 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                 status == 200 and any("chunk" in event for event in chat_events) and bool(stream_session_id),
                 f"status={status} events={len(chat_events)}",
             )
+            add(
+                checks,
+                "ai chat stream shape",
+                status == 200
+                and any(isinstance(event.get("chunk"), str) for event in chat_events)
+                and bool(stream_done)
+                and stream_done[-1].get("done") is True
+                and isinstance(stream_done[-1].get("session_id"), str),
+                f"status={status}",
+            )
 
             status, summary_events = client.stream_events(
                 "/api/ai/global-summary/stream",
@@ -396,6 +406,15 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                 and any("chunk" in event for event in summary_events)
                 and bool(summary_done),
                 f"status={status} events={len(summary_events)}",
+            )
+            add(
+                checks,
+                "global summary stream shape",
+                status == 200
+                and any(isinstance(event.get("chunk"), str) for event in summary_events)
+                and bool(summary_done)
+                and summary_done[-1].get("done") is True,
+                f"status={status}",
             )
 
         status, sessions = client.request("GET", "/api/ai/sessions")
@@ -537,6 +556,17 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                 and any("chunk" in event for event in skill_events)
                 and bool(generated_skill_slug),
                 f"status={status} events={len(skill_events)} slug={generated_skill_slug or 'n/a'}",
+            )
+            add(
+                checks,
+                "skill generate stream shape",
+                status == 200
+                and any(isinstance(event.get("chunk"), str) for event in skill_events)
+                and bool(done_events)
+                and done_events[-1].get("done") is True
+                and isinstance(done_events[-1].get("slug"), str)
+                and isinstance(done_events[-1].get("name"), str),
+                f"status={status}",
             )
 
         status, skills = client.request("GET", "/api/skills/")
