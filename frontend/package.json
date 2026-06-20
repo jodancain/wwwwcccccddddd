@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5175",
     "build": "vue-tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "verify": "..\\scripts\\verify_all.bat",
+    "verify:heavy": "..\\scripts\\verify_all.bat --include-heavy"
   },
   "dependencies": {
     "vue": "^3.4.0",

@@ -108,6 +108,12 @@ start.bat
 scripts\verify_all.bat
 ```
 
+或在 `frontend/` 目录中运行：
+
+```bash
+npm run verify
+```
+
 它会依次执行：
 - Python 编译检查
 - 后端运行时烟测（消息、联系人、同步、AI 聊天、人物画像、训练状态、开放 API）
@@ -124,6 +130,13 @@ scripts\verify_all.bat --backend-url http://127.0.0.1:8090 --frontend-url http:/
 
 ```bash
 scripts\verify_all.bat --include-heavy
+```
+
+或：
+
+```bash
+cd frontend
+npm run verify:heavy
 ```
 
 ## 使用说明
