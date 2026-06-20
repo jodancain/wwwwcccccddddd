@@ -37,7 +37,8 @@ def list_skills() -> list[dict]:
 
 def get_skill(slug: str) -> Optional[dict]:
     """Load a skill by slug, returning metadata + full content."""
-    skill_dir = SKILLS_DIR / slug
+    slug = _sanitize_slug(slug)
+    skill_dir = _skill_dir(slug)
     skill_file = skill_dir / "SKILL.md"
     if not skill_file.exists():
         return None
@@ -53,7 +54,7 @@ def get_skill(slug: str) -> Optional[dict]:
 def save_skill(slug: str, content: str) -> dict:
     """Save a skill. Content should be full SKILL.md with frontmatter."""
     slug = _sanitize_slug(slug)
-    skill_dir = SKILLS_DIR / slug
+    skill_dir = _skill_dir(slug)
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_file = skill_dir / "SKILL.md"
     skill_file.write_text(content, encoding="utf-8")
@@ -66,7 +67,8 @@ def save_skill(slug: str, content: str) -> dict:
 
 def delete_skill(slug: str) -> bool:
     """Delete a skill directory."""
-    skill_dir = SKILLS_DIR / slug
+    slug = _sanitize_slug(slug)
+    skill_dir = _skill_dir(slug)
     if not skill_dir.exists():
         return False
     import shutil
@@ -153,3 +155,12 @@ def _sanitize_slug(name: str) -> str:
     slug = re.sub(r"[^\w\u4e00-\u9fff-]", "-", name.lower())
     slug = re.sub(r"-+", "-", slug).strip("-")
     return slug or "unnamed-skill"
+
+
+def _skill_dir(slug: str) -> Path:
+    """Return a skill directory path guaranteed to stay under SKILLS_DIR."""
+    skill_dir = (SKILLS_DIR / slug).resolve()
+    skills_root = SKILLS_DIR.resolve()
+    if skill_dir != skills_root and skills_root not in skill_dir.parents:
+        raise ValueError("Invalid skill slug")
+    return skill_dir

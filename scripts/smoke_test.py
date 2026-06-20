@@ -465,9 +465,14 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
         status, saved = client.request(
             "POST",
             "/api/skills/save",
-            {"slug": created_skill_slug, "content": skill_content},
+            {"slug": "../codex-smoke-skill", "content": skill_content},
         )
-        add(checks, "skill save", status == 200 and isinstance(saved, dict), f"status={status}")
+        add(
+            checks,
+            "skill save sanitizes slug",
+            status == 200 and isinstance(saved, dict) and saved.get("slug") == created_skill_slug,
+            f"status={status} slug={saved.get('slug') if isinstance(saved, dict) else 'n/a'}",
+        )
 
         status, skill = client.request("GET", f"/api/skills/{created_skill_slug}")
         add(
