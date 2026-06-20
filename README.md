@@ -100,6 +100,26 @@ Windows:
 start.bat
 ```
 
+## 验证与回归测试
+
+启动后端和前端后，可以运行一键验证脚本：
+
+```bash
+scripts\verify_all.bat
+```
+
+它会依次执行：
+- Python 编译检查
+- 后端运行时烟测（消息、联系人、同步、AI 聊天、人物画像、训练状态、开放 API）
+- 前端烟测（Vite 入口、Vue 模块转换、前端代理）
+- 前端生产构建
+
+如果需要指定地址：
+
+```bash
+scripts\verify_all.bat --backend-url http://127.0.0.1:8090 --frontend-url http://127.0.0.1:5175
+```
+
 ## 使用说明
 
 ### 基本操作
