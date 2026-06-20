@@ -577,6 +577,25 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             f"status={status} count={len(skills) if isinstance(skills, list) else 'n/a'}",
         )
 
+        missing_skill_slug = "codex-smoke-missing-skill"
+        status, missing_skill = client.request("GET", f"/api/skills/{missing_skill_slug}")
+        add(
+            checks,
+            "skill missing get",
+            status == 200 and isinstance(missing_skill, dict) and missing_skill.get("error") == "Skill not found",
+            f"status={status}",
+        )
+
+        status, missing_skill_delete = client.request("DELETE", f"/api/skills/{missing_skill_slug}")
+        add(
+            checks,
+            "skill missing delete",
+            status == 200
+            and isinstance(missing_skill_delete, dict)
+            and missing_skill_delete.get("success") is False,
+            f"status={status}",
+        )
+
         created_skill_slug = "codex-smoke-skill"
         skill_content = "---\nname: codex-smoke-skill\ndescription: \"smoke\"\n---\n\n# Smoke\n"
         status, saved = client.request(
