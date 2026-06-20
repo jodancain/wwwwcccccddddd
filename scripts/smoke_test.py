@@ -560,12 +560,37 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             status == 200 and isinstance(saved, dict) and saved.get("slug") == created_skill_slug,
             f"status={status} slug={saved.get('slug') if isinstance(saved, dict) else 'n/a'}",
         )
+        add(
+            checks,
+            "skill save shape",
+            status == 200 and _has_keys(saved, {"name", "description", "slug", "path"}),
+            f"status={status}",
+        )
+
+        status, skills_after_save = client.request("GET", "/api/skills/")
+        saved_list_item = None
+        if isinstance(skills_after_save, list):
+            saved_list_item = next((item for item in skills_after_save if item.get("slug") == created_skill_slug), None)
+        add(
+            checks,
+            "skills list shape",
+            status == 200
+            and isinstance(saved_list_item, dict)
+            and _has_keys(saved_list_item, {"name", "description", "slug", "path", "size"}),
+            f"status={status}",
+        )
 
         status, skill = client.request("GET", f"/api/skills/{created_skill_slug}")
         add(
             checks,
             "skill get",
             status == 200 and isinstance(skill, dict) and skill.get("content", "").startswith("---"),
+            f"status={status}",
+        )
+        add(
+            checks,
+            "skill get shape",
+            status == 200 and _has_keys(skill, {"name", "description", "slug", "content", "body"}),
             f"status={status}",
         )
 
