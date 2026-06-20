@@ -32,7 +32,16 @@ def main() -> int:
     parser.add_argument("--backend-url", default="http://127.0.0.1:8090")
     parser.add_argument("--frontend-url", default="http://127.0.0.1:5175")
     parser.add_argument("--skip-build", action="store_true", help="Skip npm run build.")
+    parser.add_argument(
+        "--include-heavy",
+        action="store_true",
+        help="Also run heavier backend checks that write exports or trigger sync.",
+    )
     args = parser.parse_args()
+
+    backend_smoke_cmd = [args.python, "scripts/smoke_test.py", "--base-url", args.backend_url]
+    if args.include_heavy:
+        backend_smoke_cmd.append("--include-heavy")
 
     steps: list[tuple[str, list[str], Path]] = [
         (
@@ -49,7 +58,7 @@ def main() -> int:
         ),
         (
             "backend smoke",
-            [args.python, "scripts/smoke_test.py", "--base-url", args.backend_url],
+            backend_smoke_cmd,
             ROOT,
         ),
         (

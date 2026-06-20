@@ -136,7 +136,7 @@ def websocket_url(base_url: str) -> str:
     return urllib.parse.urlunparse((scheme, parsed.netloc, "/ws", "", "", ""))
 
 
-def run(base_url: str) -> list[Check]:
+def run(base_url: str, include_heavy: bool = False) -> list[Check]:
     client = Client(base_url)
     checks: list[Check] = []
     created_api_id: str | None = None
@@ -164,6 +164,15 @@ def run(base_url: str) -> list[Check]:
 
         ws_ok, ws_detail = _websocket_probe(websocket_url(base_url))
         add(checks, "websocket connect", ws_ok, ws_detail)
+
+        if include_heavy:
+            status, triggered = client.request("POST", "/api/sync/trigger")
+            add(
+                checks,
+                "sync trigger",
+                status == 200 and isinstance(triggered, dict) and "message" in triggered,
+                f"status={status}",
+            )
 
         status, conversations = client.request("GET", "/api/messages/conversations")
         if status == 200 and isinstance(conversations, list) and conversations:
@@ -326,6 +335,18 @@ def run(base_url: str) -> list[Check]:
 
         status, stats = client.request("GET", "/api/training/stats")
         add(checks, "training stats", status == 200 and isinstance(stats, dict), f"status={status}")
+
+        if include_heavy:
+            status, export = client.request("POST", "/api/training/export-data")
+            add(
+                checks,
+                "training export data",
+                status == 200
+                and isinstance(export, dict)
+                and "output_file" in export
+                and "dataset_info_file" in export,
+                f"status={status} conversations={export.get('total_conversations') if isinstance(export, dict) else 'n/a'}",
+            )
 
         status, training = client.request("GET", "/api/training/status")
         add(
@@ -493,9 +514,14 @@ def run(base_url: str) -> list[Check]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run WeChatAI backend smoke tests.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8090")
+    parser.add_argument(
+        "--include-heavy",
+        action="store_true",
+        help="Also run heavier checks that write training exports or trigger sync.",
+    )
     args = parser.parse_args()
 
-    checks = run(args.base_url)
+    checks = run(args.base_url, include_heavy=args.include_heavy)
     for check in checks:
         status = "PASS" if check.ok else "FAIL"
         print(f"{status:4} {check.name:24} {check.detail}")

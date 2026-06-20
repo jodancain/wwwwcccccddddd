@@ -120,6 +120,12 @@ scripts\verify_all.bat
 scripts\verify_all.bat --backend-url http://127.0.0.1:8090 --frontend-url http://127.0.0.1:5175
 ```
 
+如果需要覆盖会写出训练数据或触发同步的重型检查：
+
+```bash
+scripts\verify_all.bat --include-heavy
+```
+
 ## 使用说明
 
 ### 基本操作
