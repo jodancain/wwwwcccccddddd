@@ -53,6 +53,31 @@ class Client:
         except urllib.error.HTTPError as exc:
             return exc.code, self._parse_response(exc.read(), exc.headers.get("content-type", ""))
 
+    def stream_events(self, path: str, body: dict[str, Any], timeout: int = 90) -> tuple[int, list[dict[str, Any]]]:
+        req = urllib.request.Request(
+            self.base_url + path,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        events: list[dict[str, Any]] = []
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
+                status = resp.status
+        except urllib.error.HTTPError as exc:
+            text = exc.read().decode("utf-8", errors="replace")
+            status = exc.code
+
+        for line in text.splitlines():
+            if not line.startswith("data: "):
+                continue
+            try:
+                events.append(json.loads(line[6:]))
+            except json.JSONDecodeError:
+                events.append({"raw": line[6:]})
+        return status, events
+
     @staticmethod
     def _parse_response(raw: bytes, content_type: str) -> Any:
         if "application/json" in content_type:
@@ -73,6 +98,7 @@ def run(base_url: str) -> list[Check]:
     checks: list[Check] = []
     created_api_id: str | None = None
     created_skill_slug: str | None = None
+    generated_skill_slug: str | None = None
     talker = ""
 
     try:
@@ -82,6 +108,14 @@ def run(base_url: str) -> list[Check]:
             "sync status",
             status == 200 and isinstance(sync, dict) and sync.get("total_messages", 0) > 0,
             f"status={status} total={sync.get('total_messages') if isinstance(sync, dict) else 'n/a'}",
+        )
+
+        status, realtime = client.request("GET", "/api/sync/realtime-status")
+        add(
+            checks,
+            "realtime status",
+            status == 200 and isinstance(realtime, dict) and "running" in realtime,
+            f"status={status} running={realtime.get('running') if isinstance(realtime, dict) else 'n/a'}",
         )
 
         status, conversations = client.request("GET", "/api/messages/conversations")
@@ -176,6 +210,18 @@ def run(base_url: str) -> list[Check]:
                 f"status={status}",
             )
 
+            status, skill_events = client.stream_events("/api/skills/generate/stream", {"talker": talker})
+            done_events = [event for event in skill_events if event.get("done")]
+            generated_skill_slug = done_events[-1].get("slug") if done_events else None
+            add(
+                checks,
+                "skill generate stream",
+                status == 200
+                and any("chunk" in event for event in skill_events)
+                and bool(generated_skill_slug),
+                f"status={status} events={len(skill_events)} slug={generated_skill_slug or 'n/a'}",
+            )
+
         status, skills = client.request("GET", "/api/skills/")
         add(
             checks,
@@ -225,6 +271,17 @@ def run(base_url: str) -> list[Check]:
                     f"status={status}",
                 )
 
+                status, messages = client.request(
+                    "GET",
+                    f"/open/v1/{created_api_id}/messages?{query({'api_key': api_key, 'page_size': 2})}",
+                )
+                add(
+                    checks,
+                    "open api messages",
+                    status == 200 and isinstance(messages, dict) and isinstance(messages.get("items"), list),
+                    f"status={status} items={len(messages.get('items', [])) if isinstance(messages, dict) else 'n/a'}",
+                )
+
                 recent_query = query({"api_key": api_key, "limit": 2})
                 status, recent = client.request("GET", f"/open/v1/{created_api_id}/messages/recent?{recent_query}")
                 add(
@@ -233,10 +290,43 @@ def run(base_url: str) -> list[Check]:
                     status == 200 and isinstance(recent, list),
                     f"status={status} count={len(recent) if isinstance(recent, list) else 'n/a'}",
                 )
+
+                status, search = client.request(
+                    "GET",
+                    f"/open/v1/{created_api_id}/search?{query({'api_key': api_key, 'q': 'a', 'page_size': 2})}",
+                )
+                add(
+                    checks,
+                    "open api search",
+                    status == 200 and isinstance(search, dict) and "items" in search,
+                    f"status={status} items={len(search.get('items', [])) if isinstance(search, dict) else 'n/a'}",
+                )
+
+                status, toggled = client.request("POST", f"/api/chat-apis/{created_api_id}/toggle")
+                add(
+                    checks,
+                    "chat api toggle off",
+                    status == 200 and isinstance(toggled, dict) and toggled.get("enabled") in (0, False),
+                    f"status={status}",
+                )
+
+                status, unauthorized = client.request("GET", f"/open/v1/{created_api_id}/info?{auth_query}")
+                add(checks, "open api disabled auth", status == 401, f"status={status}")
+
+                status, toggled = client.request("POST", f"/api/chat-apis/{created_api_id}/toggle")
+                add(
+                    checks,
+                    "chat api toggle on",
+                    status == 200 and isinstance(toggled, dict) and toggled.get("enabled") in (1, True),
+                    f"status={status}",
+                )
     finally:
         if created_api_id:
             status, _ = client.request("DELETE", f"/api/chat-apis/{created_api_id}")
             add(checks, "cleanup chat api", status == 200, f"status={status}")
+        if generated_skill_slug:
+            status, _ = client.request("DELETE", f"/api/skills/{generated_skill_slug}")
+            add(checks, "cleanup generated skill", status == 200, f"status={status}")
         if created_skill_slug:
             status, _ = client.request("DELETE", f"/api/skills/{created_skill_slug}")
             add(checks, "cleanup skill", status == 200, f"status={status}")
