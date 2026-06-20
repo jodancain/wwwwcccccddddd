@@ -53,6 +53,16 @@ SENSITIVE_PATTERNS = [
     ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b")),
 ]
 
+EXPECTED_BACKEND_PORT = "8090"
+
+PORT_DEFAULT_FILES = [
+    (ROOT / "backend" / "app" / "config" / "settings.py", f"APP_PORT: int = {EXPECTED_BACKEND_PORT}"),
+    (ROOT / "frontend" / "vite.config.ts", f"http://127.0.0.1:{EXPECTED_BACKEND_PORT}"),
+    (ROOT / ".env.example", f"APP_PORT={EXPECTED_BACKEND_PORT}"),
+    (ROOT / "scripts" / "verify_all.py", f"http://127.0.0.1:{EXPECTED_BACKEND_PORT}"),
+    (ROOT / "scripts" / "smoke_test.py", f"http://127.0.0.1:{EXPECTED_BACKEND_PORT}"),
+]
+
 
 def iter_files() -> list[Path]:
     files: list[Path] = []
@@ -89,6 +99,15 @@ def main() -> int:
         secrets = sensitive_hits(text)
         if secrets:
             failures.append(f"{rel}: possible secret material: {', '.join(secrets)}")
+
+    for path, expected in PORT_DEFAULT_FILES:
+        rel = path.relative_to(ROOT)
+        if not path.exists():
+            failures.append(f"{rel}: missing port default source")
+            continue
+        text = path.read_text(encoding="utf-8")
+        if expected not in text:
+            failures.append(f"{rel}: backend default port must stay on {EXPECTED_BACKEND_PORT}")
 
     if failures:
         print("Source health check failed:")

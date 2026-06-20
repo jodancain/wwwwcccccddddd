@@ -64,7 +64,7 @@ if exist "frontend\dist\index.html" (
     echo.
     echo ==========================================
     echo    WeChatAI 已启动!
-    echo    打开浏览器访问: http://localhost:8080
+    echo    打开浏览器访问: http://localhost:8090
     echo ==========================================
     echo.
     echo 按 Ctrl+C 停止服务
@@ -74,7 +74,7 @@ if exist "frontend\dist\index.html" (
     echo.
 
     :: Start backend
-    echo [1/2] 启动后端 (端口 8080)...
+    echo [1/2] 启动后端 (端口 8090)...
     cd backend
     start "WeChatAI-Backend" cmd /c "python run.py"
     cd ..

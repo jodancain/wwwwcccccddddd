@@ -91,7 +91,7 @@ cd ../backend
 python run.py
 ```
 
-访问 **http://localhost:8080**
+访问 **http://localhost:8090**
 
 ### 一键启动
 
@@ -218,7 +218,7 @@ WeChatai/
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API 地址（DeepSeek: `https://api.deepseek.com`） |
 | `OPENAI_MODEL` | `gpt-4o` | 模型名称 |
 | `SYNC_INTERVAL_SECONDS` | `7` | 消息同步间隔 |
-| `APP_PORT` | `8080` | 后端端口 |
+| `APP_PORT` | `8090` | 后端端口 |
 
 ## 注意事项
 
