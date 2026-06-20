@@ -644,6 +644,27 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
         )
 
         if talker:
+            missing_api_id = "codex-missing-api"
+            status, missing_api_delete = client.request("DELETE", f"/api/chat-apis/{missing_api_id}")
+            add(
+                checks,
+                "chat api missing delete",
+                status == 200
+                and isinstance(missing_api_delete, dict)
+                and missing_api_delete.get("success") is False,
+                f"status={status}",
+            )
+
+            status, missing_api_toggle = client.request("POST", f"/api/chat-apis/{missing_api_id}/toggle")
+            add(
+                checks,
+                "chat api missing toggle",
+                status == 404
+                and isinstance(missing_api_toggle, dict)
+                and missing_api_toggle.get("detail") == "API not found",
+                f"status={status}",
+            )
+
             status, api = client.request(
                 "POST",
                 "/api/chat-apis/create",
