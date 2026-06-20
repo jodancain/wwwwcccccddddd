@@ -5,7 +5,7 @@ import re
 import sys
 from pathlib import Path
 
-from source_health import FORBIDDEN_STRINGS, ROOT
+from source_health import ROOT, sensitive_hits, suspicious_text_hits
 
 
 DIST = ROOT / "frontend" / "dist"
@@ -24,9 +24,12 @@ def main() -> int:
         if "WeChatAI" not in html:
             failures.append("dist index title does not mention WeChatAI")
 
-        hits = sorted({f"U+{ord(token[0]):04X}" for token in FORBIDDEN_STRINGS if token in html})
+        hits = suspicious_text_hits(html)
         if hits:
             failures.append(f"dist index has suspicious text markers: {', '.join(hits)}")
+        secrets = sensitive_hits(html)
+        if secrets:
+            failures.append(f"dist index has possible secret material: {', '.join(secrets)}")
 
         asset_paths = re.findall(r"""(?:src|href)=["'](/assets/[^"']+)["']""", html)
         js_assets = [path for path in asset_paths if path.endswith(".js")]
@@ -43,6 +46,15 @@ def main() -> int:
                 continue
             if asset.stat().st_size <= 0:
                 failures.append(f"referenced asset is empty: {asset_path}")
+                continue
+            if asset.suffix.lower() in {".js", ".css"}:
+                text = asset.read_text(encoding="utf-8", errors="replace")
+                hits = suspicious_text_hits(text)
+                if hits:
+                    failures.append(f"{asset_path} has suspicious text markers: {', '.join(hits)}")
+                secrets = sensitive_hits(text)
+                if secrets:
+                    failures.append(f"{asset_path} has possible secret material: {', '.join(secrets)}")
 
     if failures:
         print("Frontend dist health check failed:")

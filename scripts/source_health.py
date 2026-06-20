@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import re
 from pathlib import Path
 
 
@@ -46,6 +47,12 @@ FORBIDDEN_STRINGS = [
     *[chr(code) for code in SUSPICIOUS_CODEPOINTS],
 ]
 
+SENSITIVE_PATTERNS = [
+    ("WeChatAI API key", re.compile(r"\bwca_[0-9a-fA-F]{24,}\b")),
+    ("OpenAI-style API key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b")),
+]
+
 
 def iter_files() -> list[Path]:
     files: list[Path] = []
@@ -53,6 +60,14 @@ def iter_files() -> list[Path]:
         files.extend(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in TEXT_SUFFIXES)
     files.extend(p for p in TEXT_FILES if p.exists())
     return sorted(set(files))
+
+
+def suspicious_text_hits(text: str) -> list[str]:
+    return sorted({f"U+{ord(token[0]):04X}" for token in FORBIDDEN_STRINGS if token in text})
+
+
+def sensitive_hits(text: str) -> list[str]:
+    return [name for name, pattern in SENSITIVE_PATTERNS if pattern.search(text)]
 
 
 def main() -> int:
@@ -68,9 +83,12 @@ def main() -> int:
             continue
 
         scanned += 1
-        hits = sorted({f"U+{ord(token[0]):04X}" for token in FORBIDDEN_STRINGS if token in text})
+        hits = suspicious_text_hits(text)
         if hits:
             failures.append(f"{rel}: suspicious text markers: {', '.join(hits)}")
+        secrets = sensitive_hits(text)
+        if secrets:
+            failures.append(f"{rel}: possible secret material: {', '.join(secrets)}")
 
     if failures:
         print("Source health check failed:")
