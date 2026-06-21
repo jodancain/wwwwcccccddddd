@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Query
 from fastapi.responses import Response
 
@@ -18,7 +20,7 @@ def get_resolver() -> WeChatMediaResolver:
 @router.get("/image/{local_id}")
 async def get_image(local_id: int):
     resolver = get_resolver()
-    image_bytes, mime_type = resolver.load_image_bytes(local_id)
+    image_bytes, mime_type = await asyncio.to_thread(resolver.load_image_bytes, local_id)
     if image_bytes:
         return Response(content=image_bytes, media_type=mime_type)
     return Response(status_code=404, content=b"Image not found")

@@ -1,4 +1,5 @@
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -6,11 +7,14 @@ from app.config.settings import get_settings
 
 
 class WeChatMediaResolver:
+    HASH_INDEX_TIME_BUDGET_SECONDS = 1.0
+
     def __init__(self):
         self.settings = get_settings()
         self.msg_db = self.settings.decrypted_wx_dir / "MSG.db"
-        self._msg_attach_dir = self._detect_msg_attach_dir()
+        self._msg_attach_dir: Optional[Path] = None
         self._hash_index: dict[str, Path] | None = None
+        self._msg_index_ready = False
 
     def _detect_msg_attach_dir(self) -> Optional[Path]:
         wx_dir = None
@@ -65,10 +69,15 @@ class WeChatMediaResolver:
 
     def _build_hash_index(self) -> dict[str, Path]:
         index: dict[str, Path] = {}
+        if self._msg_attach_dir is None:
+            self._msg_attach_dir = self._detect_msg_attach_dir()
         if not self._msg_attach_dir or not self._msg_attach_dir.exists():
             return index
 
+        deadline = time.monotonic() + self.HASH_INDEX_TIME_BUDGET_SECONDS
         for file in self._msg_attach_dir.rglob("*"):
+            if time.monotonic() >= deadline:
+                break
             if not file.is_file():
                 continue
             low = file.name.lower()
@@ -90,13 +99,23 @@ class WeChatMediaResolver:
         if not self.msg_db.exists():
             return None
 
-        conn = sqlite3.connect(str(self.msg_db))
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT Type, StrContent, BytesExtra FROM MSG WHERE localId = ? LIMIT 1",
-            (local_id,),
-        ).fetchone()
-        conn.close()
+        conn = None
+        try:
+            conn = sqlite3.connect(str(self.msg_db), timeout=0.5)
+            if not self._msg_index_ready:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_msg_local_id ON MSG(localId)")
+                conn.commit()
+                self._msg_index_ready = True
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT Type, StrContent, BytesExtra FROM MSG WHERE localId = ? LIMIT 1",
+                (local_id,),
+            ).fetchone()
+        except sqlite3.Error:
+            return None
+        finally:
+            if conn:
+                conn.close()
         if not row or row["Type"] != 3:
             return None
 
@@ -111,13 +130,6 @@ class WeChatMediaResolver:
         keys = self._extract_hash_keys_from_xml(content)
         if not keys:
             return None
-
-        if self._hash_index is None:
-            self._hash_index = self._build_hash_index()
-        for key in keys:
-            p = self._hash_index.get(key)
-            if p and p.exists():
-                return p
         return None
 
     @staticmethod

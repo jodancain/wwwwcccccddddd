@@ -70,6 +70,10 @@ class AppDatabase:
         )
         return [dict(r) for r in rows]
 
+    async def get_contact_count(self) -> int:
+        rows = await self._db.execute_fetchall("SELECT COUNT(*) AS count FROM contacts")
+        return int(rows[0]["count"] or 0) if rows else 0
+
     # --- Messages ---
 
     async def bulk_insert_messages(self, messages: list[dict]) -> int:
@@ -100,6 +104,10 @@ class AppDatabase:
         )
         await self._db.commit()
         return cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+
+    async def get_message_count(self) -> int:
+        rows = await self._db.execute_fetchall("SELECT COUNT(*) AS count FROM messages")
+        return int(rows[0]["count"] or 0) if rows else 0
 
     async def get_messages(self, talker: str = "", date: str = "",
                            search: str = "", page: int = 1,

@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -84,6 +85,8 @@ class TrainingPipeline:
         self.inference_process: Optional[subprocess.Popen] = None
         self._running = False
         self._cancel = False
+        self._deps_cache: tuple[float, list[str]] | None = None
+        self._alive_cache: tuple[float, bool] | None = None
 
         settings = get_settings()
         self.inference_port = settings.INFERENCE_PORT
@@ -94,12 +97,16 @@ class TrainingPipeline:
 
     def _check_inference_alive(self) -> bool:
         """Check if inference server is responding (works even after backend restart)."""
+        now = time.time()
+        if self._alive_cache and now - self._alive_cache[0] < 3:
+            return self._alive_cache[1]
         try:
-            import urllib.request
-            resp = urllib.request.urlopen(f"http://localhost:{self.inference_port}/v1/models", timeout=2)
-            return resp.status == 200
-        except:
-            return False
+            with socket.create_connection(("127.0.0.1", self.inference_port), timeout=0.2):
+                alive = True
+        except OSError:
+            alive = False
+        self._alive_cache = (now, alive)
+        return alive
 
     def get_status(self) -> dict:
         is_running = self._check_inference_alive()
@@ -360,11 +367,16 @@ class TrainingPipeline:
         """Check deps inside the *inference* interpreter (may differ from the
         backend venv — see :meth:`_inference_python`). Uses a subprocess so
         we don't import heavy modules into the backend process."""
+        now = time.time()
+        if self._deps_cache and now - self._deps_cache[0] < 60:
+            return self._deps_cache[1]
         py = self._inference_python()
         import importlib.util as u
         # Fast path: checking from this interpreter is fine when they match.
         if Path(py).resolve() == Path(sys.executable).resolve():
-            return [p for p in self._INFERENCE_DEPS if u.find_spec(p) is None]
+            missing = [p for p in self._INFERENCE_DEPS if u.find_spec(p) is None]
+            self._deps_cache = (now, missing)
+            return missing
         try:
             script = (
                 "import importlib.util as u, json, sys\n"
@@ -380,10 +392,14 @@ class TrainingPipeline:
             if proc.returncode == 0:
                 import json
                 out = (proc.stdout.strip().splitlines() or [""])[-1]
-                return json.loads(out)
+                missing = json.loads(out)
+                self._deps_cache = (now, missing)
+                return missing
         except Exception as e:  # noqa: BLE001
             logger.warning(f"deps probe failed: {e}")
-        return list(self._INFERENCE_DEPS)
+        missing = list(self._INFERENCE_DEPS)
+        self._deps_cache = (now, missing)
+        return missing
 
     async def start_inference_from_registry(self) -> None:
         """(Re)start the inference server using whichever model is currently

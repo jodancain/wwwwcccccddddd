@@ -81,7 +81,7 @@ async def stop_server():
 
 @router.get("/models")
 async def list_registered_models():
-    missing_deps = pipeline.missing_inference_deps()
+    missing_deps = pipeline._deps_cache[1] if pipeline._deps_cache else []
     return {
         "models": registry.list_models(),
         "active": registry.get_active(),

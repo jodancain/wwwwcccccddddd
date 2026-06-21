@@ -131,7 +131,7 @@ class WeChatMessageParser:
 
     def set_self_wxid(self, wxid: str) -> None:
         """Called by the sync engine after initialize() so we know who 'me' is."""
-        if wxid:
+        if wxid and wxid != self._self_wxid:
             self._self_wxid = wxid
             self._contact_lookup_cache = None
 

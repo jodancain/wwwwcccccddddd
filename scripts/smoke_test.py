@@ -45,8 +45,9 @@ class Client:
         if body is not None:
             data = json.dumps(body).encode("utf-8")
 
+        encoded_path = urllib.parse.quote(path, safe="/:?&=%")
         req = urllib.request.Request(
-            self.base_url + path,
+            self.base_url + encoded_path,
             data=data,
             headers=request_headers,
             method=method,
@@ -58,8 +59,9 @@ class Client:
             return exc.code, self._parse_response(exc.read(), exc.headers.get("content-type", ""))
 
     def stream_events(self, path: str, body: dict[str, Any], timeout: int = 90) -> tuple[int, list[dict[str, Any]]]:
+        encoded_path = urllib.parse.quote(path, safe="/:?&=%")
         req = urllib.request.Request(
-            self.base_url + path,
+            self.base_url + encoded_path,
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",

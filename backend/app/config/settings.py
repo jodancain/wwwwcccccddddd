@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # Sync
     SYNC_INTERVAL_SECONDS: int = 7
-    DECRYPT_INTERVAL_SECONDS: int = 60
+    DECRYPT_INTERVAL_SECONDS: int = 300
 
     # Server
     APP_HOST: str = "127.0.0.1"
