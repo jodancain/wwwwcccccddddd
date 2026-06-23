@@ -21,9 +21,34 @@ class Settings(BaseSettings):
     # AI provider: "gemini" or "openai"
     AI_PROVIDER: str = "gemini"
 
+    # Claude Agent SDK / WeChat entry agent
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_BASE_URL: str = ""
+    CLAUDE_MODEL: str = "claude-sonnet-4-6"
+    CLAUDE_AGENT_ENABLED: bool = False
+    AGENT_WECHAT_ENTRY_NAME: str = "WeixinClawBot"
+    AGENT_PERMISSION_MODE: str = "confirm"
+    AGENT_POLL_SECONDS: int = 3
+    AGENT_DEV_MODE_ENABLED: bool = False
+    AGENT_DEV_WORKSPACE: str = ""
+    AGENT_DEV_AUTO_APPLY: bool = False
+    AGENT_DEV_MAX_STEPS: int = 8
+    AGENT_DEV_COMMAND_TIMEOUT: int = 60
+    AGENT_SMART_ROUTER_ENABLED: bool = True
+    AGENT_DEV_ENABLE_CLAUDE_CODE_TOOL: bool = True
+    CLAUDE_CODE_CLI_PATH: str = ""
+    CLAUDE_CODE_MODEL: str = "sonnet"
+
     # Sync
     SYNC_INTERVAL_SECONDS: int = 7
     DECRYPT_INTERVAL_SECONDS: int = 300
+
+    # Daily WeChat summary scheduler
+    DAILY_SUMMARY_ENABLED: bool = False
+    DAILY_SUMMARY_TIME: str = "09:00"
+    DAILY_SUMMARY_RECEIVER: str = "文件传输助手"
+    DAILY_SUMMARY_HOURS: int = 24
+    DAILY_SUMMARY_MAX_MESSAGES: int = 50000
 
     # Server
     APP_HOST: str = "127.0.0.1"

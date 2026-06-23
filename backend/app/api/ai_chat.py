@@ -42,7 +42,7 @@ class SuggestRequest(BaseModel):
 
 
 class GlobalSummaryRequest(BaseModel):
-    hours: int = 24
+    hours: int = 0
     message: str = ""
 
 
@@ -168,17 +168,22 @@ async def global_summary_stream(req: GlobalSummaryRequest):
     db = await get_db()
     provider = get_ai_provider()
 
-    all_messages = await db.get_all_recent_messages(hours=req.hours, limit=50000)
+    all_history = req.hours <= 0
+    range_label = "全部已同步聊天记录" if all_history else f"最近 {req.hours} 小时"
+    all_messages = await db.get_all_recent_messages(
+        hours=req.hours,
+        limit=0 if all_history else 50000,
+    )
     if not all_messages:
         async def empty():
-            yield f"data: {json.dumps({'chunk': f'最近 {req.hours} 小时没有聊天记录。', 'session_id': ''}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'chunk': f'{range_label}里没有聊天记录。', 'session_id': ''}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(empty(), media_type="text/event-stream")
 
     context = build_global_context(all_messages)
-    session_id = await db.create_ai_session(talker="__global__", title=f"全部聊天总结 ({req.hours}h)")
-    user_msg = req.message or f"请总结我最近 {req.hours} 小时内所有微信聊天的内容。"
+    session_id = await db.create_ai_session(talker="__global__", title=f"全部聊天总结 ({range_label})")
+    user_msg = req.message or f"请总结我{range_label}的内容。"
     ai_messages = [{"role": "user", "content": f"{context}\n\n{user_msg}"}]
 
     async def generate():

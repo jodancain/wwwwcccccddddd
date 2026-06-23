@@ -51,6 +51,7 @@
         <div class="gs-options">
           <label>时间范围</label>
           <select v-model="globalHours">
+            <option :value="0">全部已同步记录</option>
             <option :value="6">最近 6 小时</option>
             <option :value="12">最近 12 小时</option>
             <option :value="24">最近 24 小时</option>
@@ -360,7 +361,7 @@ const inputText = ref('')
 const aiMessagesRef = ref<HTMLElement | null>(null)
 
 const showGlobalPanel = ref(false)
-const globalHours = ref(24)
+const globalHours = ref(0)
 const globalCustomMsg = ref('')
 const globalLoading = ref(false)
 const globalResult = ref('')

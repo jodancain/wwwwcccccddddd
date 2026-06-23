@@ -151,8 +151,11 @@ class AppDatabase:
         search_clause = ""
         params = []
         if search:
-            search_clause = "HAVING c.nickname LIKE ? OR c.remark LIKE ?"
-            params = [f"%{search}%", f"%{search}%"]
+            search_clause = (
+                "HAVING m.talker LIKE ? OR c.nickname LIKE ? OR c.remark LIKE ? "
+                "OR c.alias LIKE ? OR last_message LIKE ?"
+            )
+            params = [f"%{search}%"] * 5
         rows = await self._db.execute_fetchall(
             f"""SELECT m.talker, c.nickname, c.remark, c.is_group,
                        COUNT(*) as msg_count,
@@ -168,6 +171,72 @@ class AppDatabase:
                 {search_clause}
                 ORDER BY last_time DESC""",
             params,
+        )
+        return [dict(r) for r in rows]
+
+    async def search_conversations(self, search: str, limit: int = 10) -> list[dict]:
+        """Resolve a human name or keyword to likely conversations."""
+        if not search.strip():
+            return []
+        rows = await self._db.execute_fetchall(
+            """SELECT m.talker, c.nickname, c.remark, c.alias, c.is_group,
+                      COUNT(*) AS msg_count,
+                      MAX(m.create_time) AS last_time,
+                      (SELECT COALESCE(NULLIF(content, ''), '[' || type_name || ']')
+                       FROM messages WHERE talker = m.talker
+                       ORDER BY create_time DESC LIMIT 1) AS last_message
+               FROM messages m
+               LEFT JOIN contacts c ON m.talker = c.username
+               GROUP BY m.talker
+               HAVING m.talker LIKE ? OR c.nickname LIKE ? OR c.remark LIKE ?
+                  OR c.alias LIKE ? OR last_message LIKE ?
+               ORDER BY
+                 CASE
+                   WHEN c.remark = ? THEN 0
+                   WHEN c.nickname = ? THEN 1
+                   WHEN c.alias = ? THEN 2
+                   WHEN m.talker = ? THEN 3
+                   ELSE 4
+                 END,
+                 last_time DESC
+               LIMIT ?""",
+            [f"%{search}%"] * 5 + [search, search, search, search, limit],
+        )
+        return [dict(r) for r in rows]
+
+    async def search_messages(self, search: str, talker: str = "", limit: int = 50) -> list[dict]:
+        if not search.strip():
+            return []
+        conditions = ["(m.content LIKE ? OR m.display_content LIKE ?)"]
+        params: list = [f"%{search}%", f"%{search}%"]
+        if talker:
+            conditions.append("m.talker = ?")
+            params.append(talker)
+        where = " AND ".join(conditions)
+        rows = await self._db.execute_fetchall(
+            f"""SELECT m.id, m.talker, m.sender, m.type_name, m.is_sender,
+                      m.content, m.display_content, m.create_time, m.create_date,
+                      c.nickname, c.remark, c.is_group
+               FROM messages m
+               LEFT JOIN contacts c ON m.talker = c.username
+               WHERE {where}
+               ORDER BY m.create_time DESC
+               LIMIT ?""",
+            params + [limit],
+        )
+        return [dict(r) for r in rows]
+
+    async def get_new_inbound_messages(self, talker: str, after_id: int, limit: int = 20) -> list[dict]:
+        rows = await self._db.execute_fetchall(
+            """SELECT m.id, m.talker, m.sender, m.type_name, m.is_sender,
+                      m.content, m.display_content, m.create_time, m.create_date,
+                      c.nickname, c.remark, c.is_group
+               FROM messages m
+               LEFT JOIN contacts c ON m.talker = c.username
+               WHERE m.talker = ? AND m.id > ? AND m.is_sender = 0
+               ORDER BY m.id ASC
+               LIMIT ?""",
+            (talker, after_id, limit),
         )
         return [dict(r) for r in rows]
 
@@ -198,8 +267,87 @@ class AppDatabase:
         )
         return [dict(r) for r in reversed(rows)]
 
+    async def get_all_messages(self, limit: int = 0) -> list[dict]:
+        """Load messages across all conversations.
+
+        When limit is <= 0, load the full synchronized history. When limit is
+        positive, load the latest N messages and return them chronologically.
+        """
+        if limit and limit > 0:
+            rows = await self._db.execute_fetchall(
+                """SELECT * FROM (
+                       SELECT m.talker, m.sender, m.type, m.type_name, m.is_sender,
+                              m.content, m.create_time, m.create_date, m.is_group,
+                              c.nickname, c.remark
+                       FROM messages m
+                       LEFT JOIN contacts c ON m.talker = c.username
+                       ORDER BY m.create_time DESC
+                       LIMIT ?
+                   )
+                   ORDER BY create_time ASC""",
+                (limit,),
+            )
+            return [dict(r) for r in rows]
+
+        rows = await self._db.execute_fetchall(
+            """SELECT m.talker, m.sender, m.type, m.type_name, m.is_sender,
+                      m.content, m.create_time, m.create_date, m.is_group,
+                      c.nickname, c.remark
+               FROM messages m
+               LEFT JOIN contacts c ON m.talker = c.username
+               ORDER BY m.create_time ASC"""
+        )
+        return [dict(r) for r in rows]
+
+    async def get_global_message_overview(self) -> dict:
+        """Return aggregate coverage for all synchronized messages."""
+        totals = await self._db.execute_fetchall(
+            """SELECT COUNT(*) AS total_messages,
+                      COUNT(DISTINCT talker) AS total_conversations,
+                      MIN(create_date) AS first_date,
+                      MAX(create_date) AS last_date,
+                      MIN(create_time) AS first_time,
+                      MAX(create_time) AS last_time
+               FROM messages"""
+        )
+        conversations = await self._db.execute_fetchall(
+            """SELECT m.talker, c.nickname, c.remark, c.is_group,
+                      COUNT(*) AS msg_count,
+                      MIN(m.create_date) AS first_date,
+                      MAX(m.create_date) AS last_date,
+                      MAX(m.create_time) AS last_time,
+                      (SELECT COALESCE(NULLIF(content, ''), '[' || type_name || ']')
+                       FROM messages
+                       WHERE talker = m.talker
+                       ORDER BY create_time DESC
+                       LIMIT 1) AS last_message
+               FROM messages m
+               LEFT JOIN contacts c ON m.talker = c.username
+               GROUP BY m.talker
+               ORDER BY msg_count DESC
+               LIMIT 50"""
+        )
+        dates = await self._db.execute_fetchall(
+            """SELECT create_date AS date, COUNT(*) AS count
+               FROM messages
+               GROUP BY create_date
+               ORDER BY create_date ASC"""
+        )
+        return {
+            "totals": dict(totals[0]) if totals else {},
+            "top_conversations": [dict(r) for r in conversations],
+            "date_counts": [dict(r) for r in dates],
+        }
+
     async def get_all_recent_messages(self, hours: int = 24, limit: int = 5000) -> list[dict]:
-        """Load recent messages across ALL conversations within the last N hours."""
+        """Load messages across all conversations.
+
+        hours <= 0 means full synchronized history. limit <= 0 means no row
+        limit for that full-history read.
+        """
+        if hours <= 0:
+            return await self.get_all_messages(limit=limit)
+
         import time
         since_ts = int(time.time()) - hours * 3600
         rows = await self._db.execute_fetchall(
@@ -377,5 +525,73 @@ class AppDatabase:
                ON CONFLICT(key) DO UPDATE SET
                  value=excluded.value, updated_at=CURRENT_TIMESTAMP""",
             (key, value, description),
+        )
+        await self._db.commit()
+
+    async def get_setting(self, key: str, default: str = "") -> str:
+        rows = await self._db.execute_fetchall("SELECT value FROM settings WHERE key = ?", (key,))
+        return str(rows[0]["value"]) if rows else default
+
+    async def create_pending_action(self, action_id: str, action_type: str, payload: dict) -> dict:
+        payload_text = json.dumps(payload, ensure_ascii=False)
+        await self._db.execute(
+            """INSERT INTO agent_pending_actions (id, action_type, payload, status)
+               VALUES (?, ?, ?, 'pending')""",
+            (action_id, action_type, payload_text),
+        )
+        await self._db.commit()
+        return {
+            "id": action_id,
+            "action_type": action_type,
+            "payload": payload,
+            "status": "pending",
+        }
+
+    async def get_pending_action(self, action_id: str) -> dict | None:
+        rows = await self._db.execute_fetchall(
+            "SELECT * FROM agent_pending_actions WHERE id = ?", (action_id,)
+        )
+        if not rows:
+            return None
+        item = dict(rows[0])
+        try:
+            item["payload"] = json.loads(item.get("payload") or "{}")
+        except json.JSONDecodeError:
+            item["payload"] = {}
+        return item
+
+    async def list_pending_actions(self, limit: int = 20) -> list[dict]:
+        rows = await self._db.execute_fetchall(
+            """SELECT * FROM agent_pending_actions
+               WHERE status = 'pending'
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        out = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["payload"] = json.loads(item.get("payload") or "{}")
+            except json.JSONDecodeError:
+                item["payload"] = {}
+            out.append(item)
+        return out
+
+    async def update_pending_action_status(self, action_id: str, status: str) -> bool:
+        cursor = await self._db.execute(
+            """UPDATE agent_pending_actions
+               SET status = ?, confirmed_at = CASE WHEN ? = 'confirmed' THEN CURRENT_TIMESTAMP ELSE confirmed_at END
+               WHERE id = ? AND status = 'pending'""",
+            (status, status, action_id),
+        )
+        await self._db.commit()
+        return (cursor.rowcount or 0) > 0
+
+    async def add_agent_audit(self, event_type: str, payload: dict | str = ""):
+        payload_text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+        await self._db.execute(
+            "INSERT INTO agent_audit_log (event_type, payload) VALUES (?, ?)",
+            (event_type, payload_text),
         )
         await self._db.commit()

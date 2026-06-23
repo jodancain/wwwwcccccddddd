@@ -75,8 +75,9 @@ def fallback_chat_response(user_message: str, messages: list[dict], error: Excep
 
 def fallback_global_summary(messages: list[dict], hours: int, error: Exception | None = None) -> str:
     prefix = provider_error_message(error) if error else "我先基于本地聊天记录生成摘要。"
+    range_label = "全部已同步聊天记录" if hours <= 0 else f"最近 {hours} 小时"
     if not messages:
-        return f"{prefix}\n\n最近 {hours} 小时没有聊天记录。"
+        return f"{prefix}\n\n{range_label}里没有聊天记录。"
 
     grouped: dict[str, list[dict]] = defaultdict(list)
     for msg in messages:
@@ -110,7 +111,7 @@ def fallback_global_summary(messages: list[dict], hours: int, error: Exception |
 
     return (
         f"{prefix}\n\n"
-        f"## 总览\n最近 {hours} 小时共有 {group_count} 个会话、{total} 条消息。\n\n"
+        f"## 总览\n{range_label}共有 {group_count} 个会话、{total} 条消息。\n\n"
         f"## 活跃会话\n" + "\n".join(top_sections) + "\n\n"
         f"## 发言概览\n" + "\n".join(speaker_lines) + "\n\n"
         f"## 可能需要跟进\n{todo_text}"

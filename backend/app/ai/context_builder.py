@@ -46,9 +46,9 @@ GLOBAL_SUMMARY_SYSTEM_PROMPT = """你是一个智能微信助手，可以读取�
 
 
 def build_global_context(messages: list[dict], max_chars: int = 120000) -> str:
-    """Build context from recent messages across all conversations."""
+    """Build context from messages across all conversations."""
     if not messages:
-        return "没有最近的聊天记录。"
+        return "没有聊天记录。"
 
     groups: dict[str, list[dict]] = {}
     talker_names: dict[str, str] = {}
@@ -62,7 +62,9 @@ def build_global_context(messages: list[dict], max_chars: int = 120000) -> str:
     sorted_talkers = sorted(groups.keys(), key=lambda t: groups[t][-1].get("create_time", 0), reverse=True)
 
     total_msgs = sum(len(g) for g in groups.values())
-    parts = [f"以下是最近的微信聊天记录，共 {len(groups)} 个对话、{total_msgs} 条消息。\n"]
+    dates = [msg.get("create_date", "") for msg in messages if msg.get("create_date")]
+    date_range = f"{min(dates)} 至 {max(dates)}" if dates else "未知日期"
+    parts = [f"以下是微信聊天记录，范围 {date_range}，共 {len(groups)} 个对话、{total_msgs} 条消息。\n"]
     char_count = len(parts[0])
 
     for talker in sorted_talkers:

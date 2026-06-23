@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -11,6 +12,7 @@ from app.config.settings import get_settings
 from app.dependencies import get_db, close_db
 from app.api.router import api_router
 from app.api.ws import ws_manager
+from app.scheduler.daily_summary import daily_summary_scheduler
 from app.sync.engine import sync_engine
 
 
@@ -31,12 +33,15 @@ async def lifespan(app: FastAPI):
 
     # Start sync engine in background
     sync_task = asyncio.create_task(sync_engine.start())
+    daily_summary_task = asyncio.create_task(daily_summary_scheduler.start())
 
     yield
 
     # Shutdown
     sync_engine.stop()
+    daily_summary_scheduler.stop()
     sync_task.cancel()
+    daily_summary_task.cancel()
     await close_db()
     logger.info("WeChatAI stopped.")
 
@@ -72,7 +77,11 @@ async def websocket_endpoint(websocket: WebSocket):
         ws_manager.disconnect(websocket)
 
 
-# Serve frontend static files (production build)
-frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
+# Serve frontend static files (production build). In the PyInstaller build,
+# frontend/dist is bundled under sys._MEIPASS.
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    frontend_dist = Path(sys._MEIPASS) / "frontend" / "dist"
+else:
+    frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
     app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")

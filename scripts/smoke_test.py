@@ -166,6 +166,7 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
     created_mismatch_api_id: str | None = None
     created_skill_slug: str | None = None
     generated_skill_slug: str | None = None
+    agent_action_id: str | None = None
     ai_session_ids: set[str] = set()
     talker = ""
 
@@ -380,6 +381,106 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             "wechat status shape",
             status == 200 and _has_keys(wechat, {"wechat_running", "decrypted_dir", "decrypted_db_count"}),
             f"status={status}",
+        )
+
+        status, agent_status = client.request("GET", "/api/agent/status")
+        original_agent_enabled = agent_status.get("enabled") if isinstance(agent_status, dict) else None
+        original_agent_entry_name = agent_status.get("entry_name") if isinstance(agent_status, dict) else None
+        original_agent_entry_talker = agent_status.get("entry_talker") if isinstance(agent_status, dict) else None
+        add(
+            checks,
+            "agent status",
+            status == 200
+            and isinstance(agent_status, dict)
+            and _has_keys(agent_status, {"enabled", "entry_name", "bound", "claude_configured", "pending_actions"}),
+            f"status={status}",
+        )
+
+        status, agent_config = client.request(
+            "POST",
+            "/api/agent/config",
+            {"enabled": False, "entry_name": "\u9f99\u867e"},
+        )
+        add(
+            checks,
+            "agent config",
+            status == 200 and isinstance(agent_config, dict) and agent_config.get("entry_name") == "\u9f99\u867e",
+            f"status={status}",
+        )
+
+        status, agent_bind = client.request("POST", "/api/agent/bind", {"entry_name": "__codex_missing_entry__"})
+        add(
+            checks,
+            "agent bind missing",
+            status == 200 and isinstance(agent_bind, dict) and agent_bind.get("status") == "not_bound",
+            f"status={status}",
+        )
+        status, agent_config_restore = client.request(
+            "POST",
+            "/api/agent/config",
+            {
+                "enabled": original_agent_enabled,
+                "entry_name": original_agent_entry_name,
+                "entry_talker": original_agent_entry_talker,
+            },
+        )
+        add(
+            checks,
+            "agent config restore",
+            status == 200
+            and isinstance(agent_config_restore, dict)
+            and agent_config_restore.get("entry_name") == original_agent_entry_name,
+            f"status={status}",
+        )
+
+        status, agent_chat = client.request(
+            "POST",
+            "/api/agent/route",
+            {"message": "Codex smoke test search"},
+        )
+        add(
+            checks,
+            "agent route",
+            status == 200
+            and isinstance(agent_chat, dict)
+            and agent_chat.get("route") in {"development", "records", "general"},
+            f"status={status}",
+        )
+
+        status, agent_send = client.request(
+            "POST",
+            "/api/agent/chat",
+            {"message": "records: \u5e2e\u6211\u53d1\u7ed9CodexSmoke\u8bf4hello"},
+        )
+        if status == 200 and isinstance(agent_send, dict):
+            reply = str(agent_send.get("reply") or "")
+            marker = "\u52a8\u4f5c "
+            if marker in reply:
+                agent_action_id = reply.split(marker, 1)[1].split("\u3002", 1)[0].strip()
+        add(
+            checks,
+            "agent pending send",
+            status == 200 and isinstance(agent_send, dict) and bool(agent_action_id),
+            f"status={status} action={agent_action_id or 'n/a'}",
+        )
+
+        missing_action_id = "codex-missing"
+        status, missing_confirm = client.request("POST", f"/api/agent/actions/{missing_action_id}/confirm")
+        add(
+            checks,
+            "agent missing confirm",
+            status == 200 and isinstance(missing_confirm, dict) and missing_confirm.get("status") == "not_found",
+            f"status={status}",
+        )
+
+        status, agent_process = client.request("POST", "/api/agent/process")
+        add(
+            checks,
+            "agent process disabled",
+            status == 200
+            and isinstance(agent_process, dict)
+            and agent_process.get("status") in {"disabled", "not_bound", "ambiguous", "idle", "ok"},
+            f"status={status} result={agent_process.get('status') if isinstance(agent_process, dict) else 'n/a'}",
         )
 
         if talker:
@@ -879,6 +980,9 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
         if created_skill_slug:
             status, _ = client.request("DELETE", f"/api/skills/{created_skill_slug}")
             add(checks, "cleanup skill", status == 200, f"status={status}")
+        if agent_action_id:
+            status, _ = client.request("POST", f"/api/agent/actions/{agent_action_id}/cancel")
+            add(checks, "cleanup agent action", status == 200, f"status={status}")
         for session_id in sorted(ai_session_ids):
             status, _ = client.request("DELETE", f"/api/ai/sessions/{session_id}")
             add(checks, f"cleanup ai session {session_id}", status == 200, f"status={status}")

@@ -10,6 +10,7 @@ from app.api.send import router as send_router
 from app.api.skills import router as skills_router
 from app.api.chat_api import mgmt_router as chat_api_mgmt_router
 from app.api.training import router as training_router
+from app.api.agent import router as agent_router
 
 api_router = APIRouter()
 api_router.include_router(messages_router)
@@ -22,3 +23,4 @@ api_router.include_router(send_router)
 api_router.include_router(skills_router)
 api_router.include_router(chat_api_mgmt_router)
 api_router.include_router(training_router)
+api_router.include_router(agent_router)

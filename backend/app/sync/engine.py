@@ -183,6 +183,15 @@ class SyncEngine:
                     )
                     logger.info(f"Synced {inserted} new messages")
 
+                    try:
+                        from app.agent.service import wechat_agent_service
+
+                        result = await wechat_agent_service.process_entry_messages()
+                        if result.get("status") not in {"disabled", "idle", "skipped"}:
+                            logger.info(f"WeChat agent processed sync update: {result}")
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(f"WeChat agent processing failed: {e}")
+
             self.status = "idle"
 
         except Exception as e:

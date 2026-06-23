@@ -75,4 +75,20 @@ CREATE TABLE IF NOT EXISTS settings (
     description TEXT DEFAULT '',
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS agent_pending_actions (
+    id TEXT PRIMARY KEY,
+    action_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    confirmed_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS agent_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    payload TEXT DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
