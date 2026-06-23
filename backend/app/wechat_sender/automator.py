@@ -7,6 +7,10 @@ the window: matching window title alone is brittle (4.x sometimes shows
 look up the top-level window whose owning process is ``Weixin.exe`` (with a
 fallback to the legacy ``WeChat.exe``).
 """
+import json
+import os
+import subprocess
+import sys
 import time
 
 from loguru import logger
@@ -27,8 +31,6 @@ class WeChatAutomator:
         results: list[tuple[int, int]] = []
 
         def cb(hwnd, _acc):
-            if not win32gui.IsWindowVisible(hwnd):
-                return
             try:
                 _tid, pid = win32process.GetWindowThreadProcessId(hwnd)
             except Exception:  # noqa: BLE001
@@ -40,8 +42,13 @@ class WeChatAutomator:
             if name in self._TARGET_EXES:
                 rect = win32gui.GetWindowRect(hwnd)
                 area = max(0, rect[2] - rect[0]) * max(0, rect[3] - rect[1])
+                title = win32gui.GetWindowText(hwnd) or ""
+                if "tray" in title.lower() or "ime" in title.lower():
+                    return
+                visible = bool(win32gui.IsWindowVisible(hwnd))
+                likely_main = title in {"微信", "Weixin", "WeChat"} or visible
                 # Skip tiny utility windows (tray bubbles, popup tips)
-                if area > 200 * 200:
+                if area > 200 * 200 and likely_main:
                     results.append((hwnd, area))
 
         win32gui.EnumWindows(cb, None)
@@ -62,6 +69,13 @@ class WeChatAutomator:
 
     # ------------------------------------------------------------------
     def send_text(self, contact_name: str, text: str) -> bool:
+        if self._send_text_direct(contact_name, text):
+            return True
+        if os.environ.get("WECHATAI_SEND_NO_SUBPROCESS") == "1" or getattr(sys, "frozen", False):
+            return False
+        return self._send_text_subprocess(contact_name, text)
+
+    def _send_text_direct(self, contact_name: str, text: str) -> bool:
         try:
             import pyautogui
             import pyperclip
@@ -78,6 +92,7 @@ class WeChatAutomator:
 
         try:
             # Restore + focus
+            win32gui.ShowWindow(self._hwnd, win32con.SW_SHOW)
             win32gui.ShowWindow(self._hwnd, win32con.SW_RESTORE)
             win32gui.SetForegroundWindow(self._hwnd)
             time.sleep(0.3)
@@ -110,4 +125,37 @@ class WeChatAutomator:
             return True
         except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to send message: {e}")
+            return False
+
+    def _send_text_subprocess(self, contact_name: str, text: str) -> bool:
+        code = (
+            "import json, sys;"
+            "from app.wechat_sender.automator import WeChatAutomator;"
+            "payload=json.loads(sys.stdin.read());"
+            "ok=WeChatAutomator().send_text(payload['contact_name'], payload['text']);"
+            "print(json.dumps({'ok': ok}))"
+        )
+        env = os.environ.copy()
+        env["WECHATAI_SEND_NO_SUBPROCESS"] = "1"
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", code],
+                input=json.dumps({"contact_name": contact_name, "text": text}, ensure_ascii=False),
+                text=True,
+                capture_output=True,
+                timeout=45,
+                env=env,
+                cwd=os.getcwd(),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if proc.returncode != 0:
+                logger.error(f"Weixin subprocess send failed: {proc.stderr[:500]}")
+                return False
+            payload = json.loads((proc.stdout or "{}").strip().splitlines()[-1])
+            ok = bool(payload.get("ok"))
+            if ok:
+                logger.info(f"Message sent to {contact_name} via subprocess fallback")
+            return ok
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Weixin subprocess send crashed: {e}")
             return False

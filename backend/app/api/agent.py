@@ -14,6 +14,11 @@ class AgentConfigRequest(BaseModel):
     enabled: bool | None = None
     entry_name: str | None = None
     entry_talker: str | None = None
+    dev_mode_enabled: bool | None = None
+    dev_auto_apply: bool | None = None
+    dev_workspace: str | None = None
+    smart_router_enabled: bool | None = None
+    claude_code_planner_enabled: bool | None = None
 
 
 class BindRequest(BaseModel):
@@ -42,6 +47,11 @@ async def configure(req: AgentConfigRequest):
         enabled=req.enabled,
         entry_name=req.entry_name,
         entry_talker=req.entry_talker,
+        dev_mode_enabled=req.dev_mode_enabled,
+        dev_auto_apply=req.dev_auto_apply,
+        dev_workspace=req.dev_workspace,
+        smart_router_enabled=req.smart_router_enabled,
+        claude_code_planner_enabled=req.claude_code_planner_enabled,
     )
 
 

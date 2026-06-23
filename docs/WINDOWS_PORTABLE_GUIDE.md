@@ -101,6 +101,14 @@ data\
 
 也就是说 OpenClaw 只是微信通道，真正回答问题的是本机 `WeChatAI.exe` 里的 Agent。
 
+网页右下角的 `Agent` 按钮可以打开 Agent 控制台。这里可以查看：
+
+- `transport_mode=openclaw_forward`：微信消息由 OpenClaw 插件转发到 `/api/agent/chat`，这是推荐模式。
+- `local_polling`：后端直接轮询本地微信数据库里的入口会话；只有本地数据库能同步到 `WeixinClawBot` 会话时才会显示已绑定。
+- 每日总结、智能路由、开发模式、自动执行和 Claude Code planner 开关。
+
+如果状态里 `bound=false` 但 `openclaw_forward_ready=true`，说明 OpenClaw 转发模式可用，不代表微信入口不可用。
+
 常用问题：
 
 ```text
@@ -145,6 +153,16 @@ confirm 动作ID
 ```
 
 Agent 会先分析项目，再给出待确认的文件修改或命令。确认后才会真正执行。
+
+如果你在 Agent 控制台里临时打开“自动执行”，开发 Agent 会像 Codex 一样直接执行它自己提出的安全命令或文件修改。危险命令、删除文件、`git reset --hard`、`git clean` 等仍会被拒绝。
+
+Claude Code planner 的执行顺序是：
+
+```text
+Claude Agent SDK -> Claude Code CLI -> Anthropic Messages fallback
+```
+
+如果第三方 `ANTHROPIC_BASE_URL` 不兼容 Claude Code CLI 的模型发现或模型名，系统会自动降级到 Messages fallback，不会让微信里的 Agent 卡死。
 
 ## 7. 常见问题
 

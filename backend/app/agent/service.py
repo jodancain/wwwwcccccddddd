@@ -35,21 +35,45 @@ class WechatAgentService:
         entry_talker = await db.get_setting(self.ENTRY_TALKER_KEY, "")
         enabled = await self.is_enabled()
         pending = await db.list_pending_actions(limit=10)
+        smart_router_enabled = await self._get_bool_setting(
+            db,
+            "agent.smart_router_enabled",
+            bool(self.settings.AGENT_SMART_ROUTER_ENABLED),
+        )
+        dev_workspace = await db.get_setting(
+            "agent.dev_workspace",
+            self.settings.AGENT_DEV_WORKSPACE or str(Path.cwd()),
+        )
         return {
             "enabled": enabled,
             "entry_name": entry_name,
             "entry_talker": entry_talker,
             "bound": bool(entry_talker),
+            "transport_mode": "local_polling" if entry_talker else "openclaw_forward",
+            "openclaw_forward_ready": enabled and bool(self.settings.ANTHROPIC_API_KEY),
+            "local_polling_ready": bool(entry_talker),
             "permission_mode": self.settings.AGENT_PERMISSION_MODE,
             "claude_configured": bool(self.settings.ANTHROPIC_API_KEY),
             "claude_model": self.settings.CLAUDE_MODEL,
-            "dev_mode_enabled": bool(self.settings.AGENT_DEV_MODE_ENABLED),
-            "dev_auto_apply": bool(self.settings.AGENT_DEV_AUTO_APPLY),
-            "dev_workspace": self.settings.AGENT_DEV_WORKSPACE or str(Path.cwd()),
+            "dev_mode_enabled": await self._get_bool_setting(
+                db,
+                "agent.dev_mode_enabled",
+                bool(self.settings.AGENT_DEV_MODE_ENABLED),
+            ),
+            "dev_auto_apply": await self._get_bool_setting(
+                db,
+                "agent.dev_auto_apply",
+                bool(self.settings.AGENT_DEV_AUTO_APPLY),
+            ),
+            "dev_workspace": dev_workspace,
             "dev_agent_version": DEV_AGENT_VERSION,
-            "smart_router_enabled": bool(self.settings.AGENT_SMART_ROUTER_ENABLED),
-            "router_mode": "ai_first" if self.settings.AGENT_SMART_ROUTER_ENABLED else "local_fallback",
-            "claude_code_planner_enabled": bool(self.settings.AGENT_DEV_ENABLE_CLAUDE_CODE_TOOL),
+            "smart_router_enabled": smart_router_enabled,
+            "router_mode": "ai_first" if smart_router_enabled else "local_fallback",
+            "claude_code_planner_enabled": await self._get_bool_setting(
+                db,
+                "agent.claude_code_planner_enabled",
+                bool(self.settings.AGENT_DEV_ENABLE_CLAUDE_CODE_TOOL),
+            ),
             "claude_code_cli_path": self.settings.CLAUDE_CODE_CLI_PATH or "auto",
             "claude_code_model": self.settings.CLAUDE_CODE_MODEL,
             "daily_summary": await daily_summary_scheduler.status(),
@@ -63,12 +87,21 @@ class WechatAgentService:
             return stored.lower() in {"1", "true", "yes", "on"}
         return bool(self.settings.CLAUDE_AGENT_ENABLED)
 
+    async def _get_bool_setting(self, db, key: str, default: bool) -> bool:
+        raw = await db.get_setting(key, "true" if default else "false")
+        return str(raw).strip().lower() in {"1", "true", "yes", "on", "开启", "开"}
+
     async def configure(
         self,
         *,
         enabled: bool | None = None,
         entry_name: str | None = None,
         entry_talker: str | None = None,
+        dev_mode_enabled: bool | None = None,
+        dev_auto_apply: bool | None = None,
+        dev_workspace: str | None = None,
+        smart_router_enabled: bool | None = None,
+        claude_code_planner_enabled: bool | None = None,
     ) -> dict:
         db = await get_db()
         if enabled is not None:
@@ -77,6 +110,32 @@ class WechatAgentService:
             await db.set_setting(self.ENTRY_NAME_KEY, entry_name.strip(), "WeChat agent entry display name")
         if entry_talker is not None:
             await db.set_setting(self.ENTRY_TALKER_KEY, entry_talker.strip(), "WeChat agent entry talker")
+        if dev_mode_enabled is not None:
+            await db.set_setting(
+                "agent.dev_mode_enabled",
+                "true" if dev_mode_enabled else "false",
+                "Developer agent mode enabled",
+            )
+        if dev_auto_apply is not None:
+            await db.set_setting(
+                "agent.dev_auto_apply",
+                "true" if dev_auto_apply else "false",
+                "Developer agent auto-apply enabled",
+            )
+        if dev_workspace is not None:
+            await db.set_setting("agent.dev_workspace", dev_workspace.strip(), "Developer agent workspace")
+        if smart_router_enabled is not None:
+            await db.set_setting(
+                "agent.smart_router_enabled",
+                "true" if smart_router_enabled else "false",
+                "Smart semantic router enabled",
+            )
+        if claude_code_planner_enabled is not None:
+            await db.set_setting(
+                "agent.claude_code_planner_enabled",
+                "true" if claude_code_planner_enabled else "false",
+                "Claude Code planner enabled",
+            )
         return await self.status()
 
     async def bind_entry(self, name: str | None = None) -> dict:

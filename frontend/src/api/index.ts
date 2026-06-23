@@ -135,6 +135,32 @@ export const getWeChatStatus = () => api.get('/settings/wechat/status').then(r =
 export const sendText = (contactName: string, content: string) =>
   api.post('/send/text', { contact_name: contactName, content }).then(r => r.data)
 
+// WeChat Agent
+export const getAgentStatus = () => api.get('/agent/status').then(r => r.data)
+export const configureAgent = (data: {
+  enabled?: boolean
+  entry_name?: string
+  entry_talker?: string
+  dev_mode_enabled?: boolean
+  dev_auto_apply?: boolean
+  dev_workspace?: string
+  smart_router_enabled?: boolean
+  claude_code_planner_enabled?: boolean
+}) => api.post('/agent/config', data).then(r => r.data)
+export const bindAgentEntry = (entryName: string) =>
+  api.post('/agent/bind', { entry_name: entryName }).then(r => r.data)
+export const chatWithAgent = (message: string) =>
+  api.post('/agent/chat', { message }).then(r => r.data)
+export const getDailySummaryStatus = () => api.get('/agent/daily-summary/status').then(r => r.data)
+export const configureDailySummary = (data: {
+  enabled?: boolean
+  receiver?: string
+  time?: string
+  hours?: number
+}) => api.post('/agent/daily-summary/config', data).then(r => r.data)
+export const previewDailySummary = () => api.post('/agent/daily-summary/preview').then(r => r.data)
+export const runDailySummary = () => api.post('/agent/daily-summary/run').then(r => r.data)
+
 // Media
 export const getImageUrl = (localId: number) => `/api/media/image/${localId}`
 

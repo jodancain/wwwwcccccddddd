@@ -11,6 +11,7 @@ from typing import Any
 from loguru import logger
 
 from app.config.settings import get_settings
+from app.dependencies import get_db
 
 
 ROUTE_DEVELOPMENT = "development"
@@ -60,11 +61,8 @@ class AgentRouter:
         if forced:
             return forced
 
-        if (
-            getattr(self.settings, "AGENT_SMART_ROUTER_ENABLED", True)
-            and self.settings.ANTHROPIC_API_KEY
-            and self.settings.ANTHROPIC_BASE_URL
-        ):
+        smart_router_enabled = await self._smart_router_enabled()
+        if smart_router_enabled and self.settings.ANTHROPIC_API_KEY and self.settings.ANTHROPIC_BASE_URL:
             try:
                 decision = await asyncio.to_thread(self._claude_route_with_retry, text)
                 if decision:
@@ -76,6 +74,14 @@ class AgentRouter:
         if heuristic:
             return heuristic
         return AgentRouteDecision(ROUTE_GENERAL, 0.55, "no strong local signal", "local")
+
+    async def _smart_router_enabled(self) -> bool:
+        db = await get_db()
+        raw = await db.get_setting(
+            "agent.smart_router_enabled",
+            "true" if getattr(self.settings, "AGENT_SMART_ROUTER_ENABLED", True) else "false",
+        )
+        return str(raw).strip().lower() in {"1", "true", "yes", "on", "开启", "开"}
 
     def _forced_route(self, text: str) -> AgentRouteDecision | None:
         compact = re.sub(r"\s+", "", text.lower())

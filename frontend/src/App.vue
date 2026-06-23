@@ -24,6 +24,9 @@
       />
     </div>
 
+    <button class="agent-panel-launcher" title="Agent 控制台" @click="showAgentPanel = true">Agent</button>
+    <AgentControlPanel v-if="showAgentPanel" @close="showAgentPanel = false" />
+
     <div v-if="showAiSendConfirm" class="send-confirm-overlay" @click.self="showAiSendConfirm = false">
       <div class="send-confirm-dialog">
         <h4>确认发送 AI 回复</h4>
@@ -43,6 +46,7 @@ import { computed, ref } from 'vue'
 import ConversationList from './components/ConversationList.vue'
 import MessageThread from './components/MessageThread.vue'
 import AIChatPanel from './components/AIChatPanel.vue'
+import AgentControlPanel from './components/AgentControlPanel.vue'
 import { sendText } from './api'
 import { useWebSocket } from './composables/useWebSocket'
 
@@ -52,6 +56,7 @@ const convListRef = ref<InstanceType<typeof ConversationList> | null>(null)
 const msgThreadRef = ref<InstanceType<typeof MessageThread> | null>(null)
 const aiPanelRef = ref<InstanceType<typeof AIChatPanel> | null>(null)
 const showAiSendConfirm = ref(false)
+const showAgentPanel = ref(false)
 const pendingAiReply = ref('')
 
 const currentTalkerName = computed(() => {

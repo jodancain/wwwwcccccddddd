@@ -31,6 +31,52 @@ html, body, #app { height: 100%; width: 100%; overflow: hidden;
 .resize-handle { width: 4px; cursor: col-resize; background: var(--wechat-border); transition: background 0.2s; }
 .resize-handle:hover { background: var(--wechat-green); }
 
+/* Agent control panel */
+.agent-panel-launcher {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 900;
+  border: 1px solid #45475a;
+  background: #313244;
+  color: var(--ai-accent);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.22);
+}
+.agent-panel-launcher:hover { border-color: var(--ai-accent); background: #45475a; }
+.agent-panel-overlay { position: fixed; inset: 0; z-index: 1300; background: rgba(0,0,0,0.58); display: flex; align-items: center; justify-content: center; padding: 18px; }
+.agent-panel { width: min(760px, 100%); max-height: 92vh; overflow-y: auto; background: #1e1e2e; border: 1px solid #313244; border-radius: 8px; color: var(--ai-panel-text); box-shadow: 0 18px 50px rgba(0,0,0,0.42); }
+.agent-panel-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; background: #181825; border-bottom: 1px solid #313244; }
+.agent-panel-header h3 { font-size: 16px; color: var(--ai-accent); }
+.agent-icon-btn { width: 28px; height: 28px; border: 1px solid #45475a; background: #313244; color: #cdd6f4; border-radius: 4px; cursor: pointer; font-size: 18px; line-height: 1; }
+.agent-icon-btn:hover { background: #45475a; }
+.agent-section { padding: 16px 18px; border-bottom: 1px solid #313244; }
+.agent-section-title { font-size: 13px; font-weight: 700; color: #89b4fa; margin-bottom: 12px; }
+.agent-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.agent-grid label { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 38px; padding: 8px 10px; background: #313244; border: 1px solid #45475a; border-radius: 6px; font-size: 12px; color: #a6adc8; }
+.agent-grid label.wide { grid-column: 1 / -1; align-items: center; }
+.agent-grid input[type="text"],
+.agent-grid input[type="time"],
+.agent-grid input[type="number"] { flex: 1; min-width: 0; border: 1px solid #45475a; background: #181825; color: #cdd6f4; border-radius: 4px; padding: 6px 8px; font-size: 12px; outline: none; }
+.agent-grid input:focus { border-color: var(--ai-accent); }
+.agent-grid input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--wechat-green); }
+.agent-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.agent-actions button,
+.agent-footer button { border: none; border-radius: 6px; background: var(--ai-accent); color: #11111b; padding: 7px 14px; font-size: 12px; font-weight: 700; cursor: pointer; }
+.agent-actions button:hover,
+.agent-footer button:hover { opacity: 0.88; }
+.agent-actions button.danger { background: #f38ba8; }
+.agent-footer button.secondary { background: #45475a; color: #cdd6f4; }
+.agent-status-line { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.agent-status-line span { font-size: 11px; color: #a6adc8; background: #181825; border: 1px solid #313244; border-radius: 999px; padding: 4px 8px; }
+.agent-alert { margin: 14px 18px 0; padding: 8px 10px; border: 1px solid rgba(243,139,168,0.48); border-radius: 6px; background: rgba(243,139,168,0.12); color: #f5c2e7; font-size: 12px; }
+.agent-result { margin: 14px 18px; padding: 12px; max-height: 240px; overflow-y: auto; white-space: pre-wrap; border: 1px solid #313244; border-radius: 6px; background: #11111b; color: #cdd6f4; font-size: 12px; line-height: 1.55; }
+.agent-footer { padding: 0 18px 18px; display: flex; justify-content: flex-end; }
+
 /* ===== Conversation List ===== */
 .conversation-list { width: 280px; min-width: 250px; background: var(--wechat-sidebar-bg); display: flex; flex-direction: column; border-right: 1px solid var(--wechat-border); }
 .conversation-list-header { padding: 16px 12px 12px; background: var(--wechat-sidebar-bg); }

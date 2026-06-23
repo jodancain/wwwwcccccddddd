@@ -19,7 +19,7 @@ from app.config.settings import get_settings
 from app.storage.database import AppDatabase
 
 
-DEV_AGENT_VERSION = "dev-agent-2026-06-23-claude-code-planner-v6"
+DEV_AGENT_VERSION = "dev-agent-2026-06-23-control-panel-v7"
 
 
 DEV_SYSTEM_PROMPT = """你是 WeChatAI 的本地开发 Agent，目标是像 Codex 一样帮助用户改进这个项目。
@@ -122,10 +122,61 @@ class DevAgent:
     def __init__(self, db: AppDatabase):
         self.db = db
         self.settings = get_settings()
+        self.dev_mode_enabled = bool(getattr(self.settings, "AGENT_DEV_MODE_ENABLED", False))
+        self.dev_auto_apply = bool(getattr(self.settings, "AGENT_DEV_AUTO_APPLY", False))
+        self.claude_code_tool_enabled = bool(getattr(self.settings, "AGENT_DEV_ENABLE_CLAUDE_CODE_TOOL", True))
+        self.max_steps = int(getattr(self.settings, "AGENT_DEV_MAX_STEPS", 8))
+        self.command_timeout = int(getattr(self.settings, "AGENT_DEV_COMMAND_TIMEOUT", 60))
         self.workspace = self._resolve_workspace()
 
-    def _resolve_workspace(self) -> Path:
-        configured = getattr(self.settings, "AGENT_DEV_WORKSPACE", "") or ""
+    async def _load_runtime_config(self) -> None:
+        self.dev_mode_enabled = await self._runtime_bool(
+            "agent.dev_mode_enabled",
+            bool(getattr(self.settings, "AGENT_DEV_MODE_ENABLED", False)),
+        )
+        self.dev_auto_apply = await self._runtime_bool(
+            "agent.dev_auto_apply",
+            bool(getattr(self.settings, "AGENT_DEV_AUTO_APPLY", False)),
+        )
+        self.claude_code_tool_enabled = await self._runtime_bool(
+            "agent.claude_code_planner_enabled",
+            bool(getattr(self.settings, "AGENT_DEV_ENABLE_CLAUDE_CODE_TOOL", True)),
+        )
+        workspace_raw = await self.db.get_setting(
+            "agent.dev_workspace",
+            getattr(self.settings, "AGENT_DEV_WORKSPACE", "") or "",
+        )
+        self.workspace = self._resolve_workspace(workspace_raw)
+        self.max_steps = self._safe_int(
+            await self.db.get_setting("agent.dev_max_steps", str(getattr(self.settings, "AGENT_DEV_MAX_STEPS", 8))),
+            8,
+            1,
+            20,
+        )
+        self.command_timeout = self._safe_int(
+            await self.db.get_setting(
+                "agent.dev_command_timeout",
+                str(getattr(self.settings, "AGENT_DEV_COMMAND_TIMEOUT", 60)),
+            ),
+            60,
+            1,
+            300,
+        )
+
+    async def _runtime_bool(self, key: str, default: bool) -> bool:
+        raw = await self.db.get_setting(key, "true" if default else "false")
+        return str(raw).strip().lower() in {"1", "true", "yes", "on", "开启", "开"}
+
+    @staticmethod
+    def _safe_int(value: str, default: int, minimum: int, maximum: int) -> int:
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            parsed = default
+        return min(maximum, max(minimum, parsed))
+
+    def _resolve_workspace(self, configured: str | None = None) -> Path:
+        configured = configured if configured is not None else (getattr(self.settings, "AGENT_DEV_WORKSPACE", "") or "")
         root = Path(configured).expanduser() if configured.strip() else Path.cwd()
         return root.resolve()
 
@@ -142,11 +193,10 @@ class DevAgent:
         return resolved
 
     async def reply(self, message: str) -> DevAgentResult:
-        if not getattr(self.settings, "AGENT_DEV_MODE_ENABLED", False):
+        await self._load_runtime_config()
+        if not self.dev_mode_enabled:
             return DevAgentResult(
-                "开发模式没有开启。要让我像 Codex 一样读项目、改代码、运行命令，请在 .env 里设置：\n"
-                "AGENT_DEV_MODE_ENABLED=true\n"
-                f"AGENT_DEV_WORKSPACE={self.workspace}"
+                "开发模式没有开启。要让我像 Codex 一样读项目、改代码、运行命令，请先在 Agent 控制面板开启开发模式。"
             )
         if not self.settings.ANTHROPIC_API_KEY or not self.settings.ANTHROPIC_BASE_URL:
             return DevAgentResult("开发模式需要 ANTHROPIC_API_KEY 和 ANTHROPIC_BASE_URL，当前没有配置完整。")
@@ -189,7 +239,7 @@ class DevAgent:
         pending_actions: list[dict] = []
         last_text = ""
 
-        for _ in range(max(1, int(getattr(self.settings, "AGENT_DEV_MAX_STEPS", 8)))):
+        for _ in range(max(1, int(self.max_steps))):
             payload = {
                 "model": self.settings.CLAUDE_MODEL,
                 "max_tokens": 2400,
@@ -384,7 +434,7 @@ class DevAgent:
                 return await self._propose_shell_command(
                     str(args.get("reason") or ""),
                     str(args.get("command") or ""),
-                    int(args.get("timeout_seconds") or getattr(self.settings, "AGENT_DEV_COMMAND_TIMEOUT", 60)),
+                    int(args.get("timeout_seconds") or self.command_timeout),
                 )
             return {"ok": False, "error": f"unknown tool: {name}"}
         except Exception as exc:  # noqa: BLE001
@@ -453,7 +503,7 @@ class DevAgent:
         return {"ok": True, "matches": matches, "truncated": False}
 
     async def _claude_code_plan(self, prompt: str, max_chars: int) -> dict[str, Any]:
-        if not getattr(self.settings, "AGENT_DEV_ENABLE_CLAUDE_CODE_TOOL", True):
+        if not self.claude_code_tool_enabled:
             return {"ok": False, "error": "Claude Code planner is disabled"}
         if not prompt.strip():
             return {"ok": False, "error": "empty prompt"}
@@ -479,14 +529,20 @@ class DevAgent:
                 return {"ok": True, "engine": "claude_agent_sdk", "text": _truncate(text, max_chars)}
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Claude Agent SDK planner failed: {exc}")
+            cli_result = await self._run_claude_cli_plan(prompt, cli_path, max_chars)
+            if cli_result.get("ok"):
+                cli_result["claude_code_error"] = str(exc)
+                return cli_result
             fallback = await self._anthropic_planner_fallback(prompt, max_chars)
             if fallback.get("ok"):
                 fallback["claude_code_error"] = str(exc)
+                fallback["claude_cli_error"] = cli_result.get("error") or ""
                 return fallback
             return {
                 "ok": False,
                 "engine": "claude_agent_sdk",
                 "error": str(exc),
+                "claude_cli_error": cli_result.get("error") or "",
                 "fallback": fallback.get("error") or "Use built-in list_files/read_file/search_text tools.",
             }
         return {"ok": False, "error": "Claude Code planner returned no text"}
@@ -522,6 +578,55 @@ class DevAgent:
             if text:
                 chunks.append(text)
         return "\n".join(chunks).strip()
+
+    async def _run_claude_cli_plan(self, prompt: str, cli_path: str, max_chars: int) -> dict[str, Any]:
+        command = [
+            cli_path,
+            "-p",
+            "--bare",
+            "--permission-mode",
+            "plan",
+            "--tools",
+            "Read,Glob,Grep",
+            "--model",
+            getattr(self.settings, "CLAUDE_CODE_MODEL", "sonnet") or "sonnet",
+            (
+                "You are running as a read-only Claude Code planner inside WeChatAI. "
+                "Inspect the workspace only with Read, Glob, and Grep. "
+                "Do not edit files or run shell commands.\n\n"
+                f"{prompt}"
+            ),
+        ]
+        env = os.environ.copy()
+        env["ANTHROPIC_API_KEY"] = self.settings.ANTHROPIC_API_KEY
+        if self.settings.ANTHROPIC_BASE_URL:
+            env["ANTHROPIC_BASE_URL"] = self.settings.ANTHROPIC_BASE_URL
+            env.setdefault("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=str(self.workspace),
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "engine": "claude_cli", "error": str(exc)}
+
+        stdout = stdout_b.decode("utf-8", "replace").strip()
+        stderr = stderr_b.decode("utf-8", "replace").strip()
+        if proc.returncode != 0:
+            return {
+                "ok": False,
+                "engine": "claude_cli",
+                "error": _truncate(stderr or stdout or f"exit {proc.returncode}", 1200),
+                "returncode": proc.returncode,
+            }
+        text = stdout.strip()
+        if not text:
+            return {"ok": False, "engine": "claude_cli", "error": "Claude CLI returned no text"}
+        return {"ok": True, "engine": "claude_cli", "text": _truncate(text, max_chars)}
 
     async def _anthropic_planner_fallback(self, prompt: str, max_chars: int) -> dict[str, Any]:
         if not self.settings.ANTHROPIC_BASE_URL:
@@ -598,7 +703,7 @@ class DevAgent:
             path = self._resolve_path(raw_path)
             normalized.append({"path": str(path.relative_to(self.workspace)), "content": content})
         payload = {"workspace": str(self.workspace), "reason": reason, "changes": normalized}
-        if getattr(self.settings, "AGENT_DEV_AUTO_APPLY", False):
+        if self.dev_auto_apply:
             result = await execute_dev_action_payload("dev_write_files", payload)
             return {"ok": True, "auto_applied": True, "result": result}
         action = await self._create_pending("dev_write_files", payload)
@@ -613,7 +718,7 @@ class DevAgent:
         if _is_dangerous_patch(patch):
             return {"ok": False, "error": "patch deletes files; destructive patch refused"}
         payload = {"workspace": str(self.workspace), "reason": reason, "patch": patch}
-        if getattr(self.settings, "AGENT_DEV_AUTO_APPLY", False):
+        if self.dev_auto_apply:
             result = await execute_dev_action_payload("dev_apply_patch", payload)
             return {"ok": True, "auto_applied": True, "result": result}
         action = await self._create_pending("dev_apply_patch", payload)
@@ -630,7 +735,7 @@ class DevAgent:
             "command": command,
             "timeout_seconds": min(max(timeout_seconds, 1), 300),
         }
-        if getattr(self.settings, "AGENT_DEV_AUTO_APPLY", False):
+        if self.dev_auto_apply:
             result = await execute_dev_action_payload("dev_shell_command", payload)
             return {"ok": True, "auto_applied": True, "result": result}
         action = await self._create_pending("dev_shell_command", payload)
