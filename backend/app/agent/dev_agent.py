@@ -19,7 +19,7 @@ from app.config.settings import get_settings
 from app.storage.database import AppDatabase
 
 
-DEV_AGENT_VERSION = "dev-agent-2026-06-23-control-panel-v7"
+DEV_AGENT_VERSION = "dev-agent-2026-06-24-ccs-profile-v8"
 
 
 DEV_SYSTEM_PROMPT = """你是 WeChatAI 的本地开发 Agent，目标是像 Codex 一样帮助用户改进这个项目。
@@ -108,6 +108,13 @@ def _truncate(text: str, limit: int = 6000) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n...[truncated {len(text) - limit} chars]"
+
+
+def _claude_code_base_url(base_url: str) -> str:
+    normalized = (base_url or "").strip().rstrip("/")
+    if normalized.lower().endswith("/v1"):
+        return normalized[:-3].rstrip("/")
+    return normalized
 
 
 def _is_dangerous_command(command: str) -> bool:
@@ -202,6 +209,17 @@ class DevAgent:
             return DevAgentResult("开发模式需要 ANTHROPIC_API_KEY 和 ANTHROPIC_BASE_URL，当前没有配置完整。")
 
         try:
+            if "claude_code_plan" in message.lower():
+                plan = await self._claude_code_plan(message, 5000)
+                if plan.get("ok"):
+                    return DevAgentResult(
+                        text=f"Claude Code planner ({plan.get('engine')}) is available:\n\n{plan.get('text', '').strip()}",
+                        used_claude=True,
+                    )
+                return DevAgentResult(
+                    text=f"Claude Code planner failed: {plan.get('error') or plan}",
+                    used_claude=False,
+                )
             text, pending = await self._run_tool_loop(message)
             return DevAgentResult(text=text, used_claude=True, pending_actions=pending)
         except Exception as exc:  # noqa: BLE001
@@ -523,26 +541,31 @@ class DevAgent:
         if not self.settings.ANTHROPIC_API_KEY:
             return {"ok": False, "error": "ANTHROPIC_API_KEY is not configured"}
 
+        cli_result = await self._run_claude_cli_plan(prompt, cli_path, max_chars)
+        if cli_result.get("ok"):
+            return cli_result
+
         try:
-            text = await self._run_claude_agent_sdk_plan(prompt, cli_path)
+            text = await asyncio.wait_for(self._run_claude_agent_sdk_plan(prompt, cli_path), timeout=90)
             if text:
-                return {"ok": True, "engine": "claude_agent_sdk", "text": _truncate(text, max_chars)}
+                return {
+                    "ok": True,
+                    "engine": "claude_agent_sdk",
+                    "text": _truncate(text, max_chars),
+                    "claude_cli_error": cli_result.get("error") or "",
+                }
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Claude Agent SDK planner failed: {exc}")
-            cli_result = await self._run_claude_cli_plan(prompt, cli_path, max_chars)
-            if cli_result.get("ok"):
-                cli_result["claude_code_error"] = str(exc)
-                return cli_result
             fallback = await self._anthropic_planner_fallback(prompt, max_chars)
             if fallback.get("ok"):
-                fallback["claude_code_error"] = str(exc)
                 fallback["claude_cli_error"] = cli_result.get("error") or ""
+                fallback["claude_code_error"] = str(exc)
                 return fallback
             return {
                 "ok": False,
-                "engine": "claude_agent_sdk",
-                "error": str(exc),
-                "claude_cli_error": cli_result.get("error") or "",
+                "engine": "claude_cli",
+                "error": cli_result.get("error") or "Claude CLI returned no usable result",
+                "claude_code_error": str(exc),
                 "fallback": fallback.get("error") or "Use built-in list_files/read_file/search_text tools.",
             }
         return {"ok": False, "error": "Claude Code planner returned no text"}
@@ -553,9 +576,7 @@ class DevAgent:
         except ImportError:
             from claude_code_sdk import ClaudeCodeOptions as ClaudeAgentOptions, query  # type: ignore
 
-        sdk_env = {"ANTHROPIC_API_KEY": self.settings.ANTHROPIC_API_KEY}
-        if self.settings.ANTHROPIC_BASE_URL:
-            sdk_env["ANTHROPIC_BASE_URL"] = self.settings.ANTHROPIC_BASE_URL
+        sdk_env = self._claude_code_env()
 
         options = ClaudeAgentOptions(
             cwd=str(self.workspace),
@@ -579,7 +600,25 @@ class DevAgent:
                 chunks.append(text)
         return "\n".join(chunks).strip()
 
+    def _claude_code_env(self) -> dict[str, str]:
+        """Return env vars for Claude Code CLI/SDK.
+
+        The direct Messages fallback in this file expects an Anthropic-compatible
+        base URL that already includes /v1. Claude Code appends /v1 itself, so
+        its env must receive the provider root URL instead.
+        """
+        env = {
+            "ANTHROPIC_API_KEY": self.settings.ANTHROPIC_API_KEY,
+            "ANTHROPIC_AUTH_TOKEN": self.settings.ANTHROPIC_API_KEY,
+        }
+        base_url = _claude_code_base_url(self.settings.ANTHROPIC_BASE_URL)
+        if base_url:
+            env["ANTHROPIC_BASE_URL"] = base_url
+            env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
+        return env
+
     async def _run_claude_cli_plan(self, prompt: str, cli_path: str, max_chars: int) -> dict[str, Any]:
+        user_request_json = json.dumps(prompt, ensure_ascii=True)
         command = [
             cli_path,
             "-p",
@@ -593,15 +632,13 @@ class DevAgent:
             (
                 "You are running as a read-only Claude Code planner inside WeChatAI. "
                 "Inspect the workspace only with Read, Glob, and Grep. "
-                "Do not edit files or run shell commands.\n\n"
-                f"{prompt}"
+                "Do not edit files or run shell commands. "
+                "The user request is JSON-encoded ASCII to preserve non-ASCII text; decode it semantically before planning.\n\n"
+                f"User request JSON string: {user_request_json}"
             ),
         ]
         env = os.environ.copy()
-        env["ANTHROPIC_API_KEY"] = self.settings.ANTHROPIC_API_KEY
-        if self.settings.ANTHROPIC_BASE_URL:
-            env["ANTHROPIC_BASE_URL"] = self.settings.ANTHROPIC_BASE_URL
-            env.setdefault("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1")
+        env.update(self._claude_code_env())
         try:
             proc = await asyncio.create_subprocess_exec(
                 *command,
