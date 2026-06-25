@@ -67,6 +67,8 @@ export const getContacts = (params: {
 export const listChatApis = () => api.get('/chat-apis/').then(r => r.data)
 export const createChatApi = (talker: string, name = '') =>
   api.post('/chat-apis/create', { talker, name }).then(r => r.data)
+export const createAgentApi = (name = 'External Agent API', permissions = ['agent:chat']) =>
+  api.post('/chat-apis/create-agent', { name, permissions }).then(r => r.data)
 export const deleteChatApi = (id: string) => api.delete(`/chat-apis/${id}`).then(r => r.data)
 export const toggleChatApi = (id: string) => api.post(`/chat-apis/${id}/toggle`).then(r => r.data)
 

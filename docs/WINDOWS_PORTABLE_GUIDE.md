@@ -164,7 +164,61 @@ Claude Agent SDK -> Claude Code CLI -> Anthropic Messages fallback
 
 如果第三方 `ANTHROPIC_BASE_URL` 不兼容 Claude Code CLI 的模型发现或模型名，系统会自动降级到 Messages fallback，不会让微信里的 Agent 卡死。
 
-## 7. 常见问题
+## 7. 外部项目接入 Agent API
+
+其他项目可以通过受控 API Key 直接和本地 Agent 对话，效果等同于通过微信/OpenClaw 入口发消息给 Agent。
+
+创建一个只允许对话、不允许确认执行动作的 Agent API Key：
+```http
+POST http://127.0.0.1:8092/api/chat-apis/create-agent
+Content-Type: application/json
+
+{
+  "name": "My External Project",
+  "permissions": ["agent:chat"]
+}
+```
+
+调用 Agent：
+```http
+POST http://127.0.0.1:8092/open/v1/agent/chat
+Authorization: Bearer wca_xxx
+Content-Type: application/json
+
+{
+  "message": "总结最近聊天记录",
+  "session_id": "",
+  "metadata": {"source": "my-project"}
+}
+```
+
+返回里会包含 `session_id`、`reply`、`agent_route` 和 `pending_actions`。后续继续同一轮对话时，把 `session_id` 原样传回即可。
+
+权限说明：
+- `agent:chat`：允许和 Agent 对话，可以创建待确认动作。
+- `agent:confirm`：允许确认或取消待执行动作。默认不建议给外部项目。
+- `records:read`：允许读取指定会话的开放记录接口。
+- `all`：同时拥有全部权限。
+
+确认动作需要单独授权：
+```http
+POST http://127.0.0.1:8092/open/v1/agent/actions/{action_id}/confirm
+Authorization: Bearer wca_xxx
+```
+
+查看当前 key 的 Agent 状态：
+```http
+GET http://127.0.0.1:8092/open/v1/agent/status
+Authorization: Bearer wca_xxx
+```
+
+禁用或删除 key 可以继续使用网页里的 API 管理接口，或调用：
+```http
+POST   /api/chat-apis/{api_id}/toggle
+DELETE /api/chat-apis/{api_id}
+```
+
+## 8. 常见问题
 
 ### 打不开网页
 
@@ -199,7 +253,7 @@ APP_PORT=8092
 data\
 ```
 
-## 8. 给开发者重新打包
+## 9. 给开发者重新打包
 
 在项目根目录运行：
 

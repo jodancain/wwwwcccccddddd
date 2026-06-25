@@ -18,6 +18,7 @@ class AppDatabase:
         self._db = await aiosqlite.connect(self.db_path)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(SCHEMA_SQL)
+        await self._ensure_chat_api_columns()
         await self._db.commit()
         logger.info(f"Database connected: {self.db_path}")
 
@@ -25,6 +26,24 @@ class AppDatabase:
         if self._db:
             await self._db.close()
             logger.info("Database closed")
+
+    async def _ensure_chat_api_columns(self):
+        rows = await self._db.execute_fetchall("PRAGMA table_info(chat_apis)")
+        existing = {str(row["name"]) for row in rows}
+        additions = {
+            "scope": "ALTER TABLE chat_apis ADD COLUMN scope TEXT DEFAULT 'records'",
+            "permissions": "ALTER TABLE chat_apis ADD COLUMN permissions TEXT DEFAULT 'records:read'",
+            "last_used_at": "ALTER TABLE chat_apis ADD COLUMN last_used_at DATETIME",
+        }
+        for column, statement in additions.items():
+            if column not in existing:
+                await self._db.execute(statement)
+        await self._db.execute(
+            """UPDATE chat_apis
+               SET scope = COALESCE(NULLIF(scope, ''), 'records'),
+                   permissions = COALESCE(NULLIF(permissions, ''), 'records:read')
+               WHERE scope IS NULL OR scope = '' OR permissions IS NULL OR permissions = ''"""
+        )
 
     # --- Contacts ---
 
@@ -414,13 +433,30 @@ class AppDatabase:
 
     # --- Chat APIs ---
 
-    async def create_chat_api(self, api_id: str, talker: str, api_key: str, name: str = "") -> dict:
+    async def create_chat_api(
+        self,
+        api_id: str,
+        talker: str,
+        api_key: str,
+        name: str = "",
+        scope: str = "records",
+        permissions: str = "records:read",
+    ) -> dict:
         await self._db.execute(
-            "INSERT INTO chat_apis (id, talker, api_key, name) VALUES (?, ?, ?, ?)",
-            (api_id, talker, api_key, name),
+            """INSERT INTO chat_apis (id, talker, api_key, name, scope, permissions)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (api_id, talker, api_key, name, scope, permissions),
         )
         await self._db.commit()
-        return {"id": api_id, "talker": talker, "api_key": api_key, "name": name, "enabled": 1}
+        return {
+            "id": api_id,
+            "talker": talker,
+            "api_key": api_key,
+            "name": name,
+            "scope": scope,
+            "permissions": permissions,
+            "enabled": 1,
+        }
 
     async def list_chat_apis(self) -> list[dict]:
         rows = await self._db.execute_fetchall(
@@ -436,6 +472,13 @@ class AppDatabase:
             "SELECT * FROM chat_apis WHERE api_key = ? AND enabled = 1", (api_key,)
         )
         return dict(rows[0]) if rows else None
+
+    async def touch_chat_api(self, api_id: str):
+        await self._db.execute(
+            "UPDATE chat_apis SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (api_id,),
+        )
+        await self._db.commit()
 
     async def delete_chat_api(self, api_id: str) -> bool:
         cursor = await self._db.execute("DELETE FROM chat_apis WHERE id = ?", (api_id,))
@@ -487,6 +530,13 @@ class AppDatabase:
                 "SELECT * FROM ai_sessions ORDER BY updated_at DESC"
             )
         return [dict(r) for r in rows]
+
+    async def get_ai_session(self, session_id: str) -> dict | None:
+        rows = await self._db.execute_fetchall(
+            "SELECT * FROM ai_sessions WHERE id = ?",
+            (session_id,),
+        )
+        return dict(rows[0]) if rows else None
 
     async def save_ai_message(self, session_id: str, role: str, content: str):
         await self._db.execute(

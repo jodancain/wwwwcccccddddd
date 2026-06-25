@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS chat_apis (
     talker TEXT NOT NULL,
     api_key TEXT NOT NULL UNIQUE,
     name TEXT DEFAULT '',
+    scope TEXT DEFAULT 'records',
+    permissions TEXT DEFAULT 'records:read',
+    last_used_at DATETIME,
     enabled INTEGER DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

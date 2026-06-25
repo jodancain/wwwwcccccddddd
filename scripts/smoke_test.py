@@ -163,10 +163,12 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
     client = Client(base_url)
     checks: list[Check] = []
     created_api_id: str | None = None
+    created_agent_api_id: str | None = None
     created_mismatch_api_id: str | None = None
     created_skill_slug: str | None = None
     generated_skill_slug: str | None = None
     agent_action_id: str | None = None
+    agent_action_ids: set[str] = set()
     ai_session_ids: set[str] = set()
     talker = ""
 
@@ -457,6 +459,7 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             marker = "\u52a8\u4f5c "
             if marker in reply:
                 agent_action_id = reply.split(marker, 1)[1].split("\u3002", 1)[0].strip()
+                agent_action_ids.add(agent_action_id)
         add(
             checks,
             "agent pending send",
@@ -967,10 +970,138 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
                     status == 200 and isinstance(toggled, dict) and toggled.get("enabled") in (1, True),
                     f"status={status}",
                 )
+
+                status, missing_agent_auth = client.request("GET", "/open/v1/agent/status")
+                add(checks, "open agent missing auth", status == 401, f"status={status}")
+
+                status, record_key_forbidden_agent = client.request(
+                    "GET",
+                    f"/open/v1/agent/status?{auth_query}",
+                )
+                add(
+                    checks,
+                    "open agent rejects record key",
+                    status == 403
+                    and isinstance(record_key_forbidden_agent, dict)
+                    and "agent:chat" in str(record_key_forbidden_agent.get("detail", "")),
+                    f"status={status}",
+                )
+
+                status, agent_api = client.request(
+                    "POST",
+                    "/api/chat-apis/create-agent",
+                    {"name": "Codex Smoke Agent API"},
+                )
+                agent_api_ok = status == 200 and isinstance(agent_api, dict) and agent_api.get("id") and agent_api.get("api_key")
+                add(checks, "open agent api create", agent_api_ok, f"status={status}")
+
+                if agent_api_ok:
+                    created_agent_api_id = agent_api["id"]
+                    agent_api_key = agent_api["api_key"]
+                    agent_auth_query = query({"api_key": agent_api_key})
+
+                    status, api_list = client.request("GET", "/api/chat-apis/")
+                    listed_agent_api = None
+                    if isinstance(api_list, list):
+                        listed_agent_api = next((item for item in api_list if item.get("id") == created_agent_api_id), None)
+                    add(
+                        checks,
+                        "open agent api list masks key",
+                        status == 200
+                        and isinstance(listed_agent_api, dict)
+                        and "api_key" not in listed_agent_api
+                        and listed_agent_api.get("scope") == "agent"
+                        and "agent:chat" in str(listed_agent_api.get("permissions")),
+                        f"status={status}",
+                    )
+
+                    status, agent_status = client.request("GET", f"/open/v1/agent/status?{agent_auth_query}")
+                    add(
+                        checks,
+                        "open agent status",
+                        status == 200
+                        and isinstance(agent_status, dict)
+                        and "agent:chat" in agent_status.get("permissions", []),
+                        f"status={status}",
+                    )
+
+                    status, agent_key_forbidden_records = client.request(
+                        "GET",
+                        f"/open/v1/{created_api_id}/info?{agent_auth_query}",
+                    )
+                    add(
+                        checks,
+                        "open records rejects agent key",
+                        status == 403
+                        and isinstance(agent_key_forbidden_records, dict)
+                        and "records:read" in str(agent_key_forbidden_records.get("detail", "")),
+                        f"status={status}",
+                    )
+
+                    status, open_agent_chat = client.request(
+                        "POST",
+                        "/open/v1/agent/chat",
+                        {
+                            "message": "records: \u5e2e\u6211\u53d1\u7ed9CodexSmoke\u8bf4hello",
+                            "metadata": {"source": "smoke"},
+                        },
+                        headers={"Authorization": f"Bearer {agent_api_key}"},
+                    )
+                    open_agent_session_id = open_agent_chat.get("session_id") if isinstance(open_agent_chat, dict) else ""
+                    if open_agent_session_id:
+                        ai_session_ids.add(open_agent_session_id)
+                    open_agent_actions = open_agent_chat.get("pending_actions") if isinstance(open_agent_chat, dict) else []
+                    open_agent_action_id = ""
+                    if isinstance(open_agent_actions, list) and open_agent_actions:
+                        open_agent_action_id = str((open_agent_actions[0] or {}).get("id") or "")
+                        if open_agent_action_id:
+                            agent_action_ids.add(open_agent_action_id)
+                    add(
+                        checks,
+                        "open agent chat",
+                        status == 200
+                        and isinstance(open_agent_chat, dict)
+                        and bool(open_agent_session_id)
+                        and bool(open_agent_action_id),
+                        f"status={status} session={open_agent_session_id or 'n/a'} action={open_agent_action_id or 'n/a'}",
+                    )
+
+                    if open_agent_session_id:
+                        status, session_messages = client.request(
+                            "GET",
+                            f"/open/v1/agent/sessions/{open_agent_session_id}/messages?{agent_auth_query}",
+                        )
+                        add(
+                            checks,
+                            "open agent session messages",
+                            status == 200 and isinstance(session_messages, list) and len(session_messages) >= 2,
+                            f"status={status} count={len(session_messages) if isinstance(session_messages, list) else 'n/a'}",
+                        )
+                    else:
+                        add(checks, "open agent session messages", False, "missing session")
+
+                    if open_agent_action_id:
+                        status, confirm_forbidden = client.request(
+                            "POST",
+                            f"/open/v1/agent/actions/{open_agent_action_id}/confirm?{agent_auth_query}",
+                        )
+                        add(
+                            checks,
+                            "open agent confirm requires permission",
+                            status == 403
+                            and isinstance(confirm_forbidden, dict)
+                            and "agent:confirm" in str(confirm_forbidden.get("detail", "")),
+                            f"status={status}",
+                        )
+                    else:
+                        add(checks, "open agent confirm requires permission", False, "missing action")
     finally:
         if created_mismatch_api_id:
             status, _ = client.request("DELETE", f"/api/chat-apis/{created_mismatch_api_id}")
             add(checks, "cleanup mismatch chat api", status == 200, f"status={status}")
+        if created_agent_api_id:
+            status, _ = client.request("DELETE", f"/api/chat-apis/{created_agent_api_id}")
+            add(checks, "cleanup agent chat api", status == 200, f"status={status}")
         if created_api_id:
             status, _ = client.request("DELETE", f"/api/chat-apis/{created_api_id}")
             add(checks, "cleanup chat api", status == 200, f"status={status}")
@@ -980,9 +1111,9 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
         if created_skill_slug:
             status, _ = client.request("DELETE", f"/api/skills/{created_skill_slug}")
             add(checks, "cleanup skill", status == 200, f"status={status}")
-        if agent_action_id:
-            status, _ = client.request("POST", f"/api/agent/actions/{agent_action_id}/cancel")
-            add(checks, "cleanup agent action", status == 200, f"status={status}")
+        for action_id in sorted(agent_action_ids):
+            status, _ = client.request("POST", f"/api/agent/actions/{action_id}/cancel")
+            add(checks, f"cleanup agent action {action_id}", status == 200, f"status={status}")
         for session_id in sorted(ai_session_ids):
             status, _ = client.request("DELETE", f"/api/ai/sessions/{session_id}")
             add(checks, f"cleanup ai session {session_id}", status == 200, f"status={status}")
