@@ -62,6 +62,14 @@ class AgentRouter:
             return forced
 
         smart_router_enabled = await self._smart_router_enabled()
+        if smart_router_enabled and self._openai_compatible_configured():
+            try:
+                decision = await asyncio.to_thread(self._openai_route_with_retry, text)
+                if decision:
+                    return decision
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"OpenAI-compatible agent router failed, using Claude/local fallback: {exc}")
+
         if smart_router_enabled and self.settings.ANTHROPIC_API_KEY and self.settings.ANTHROPIC_BASE_URL:
             try:
                 decision = await asyncio.to_thread(self._claude_route_with_retry, text)
@@ -82,6 +90,13 @@ class AgentRouter:
             "true" if getattr(self.settings, "AGENT_SMART_ROUTER_ENABLED", True) else "false",
         )
         return str(raw).strip().lower() in {"1", "true", "yes", "on", "开启", "开"}
+
+    def _openai_compatible_configured(self) -> bool:
+        return (
+            self.settings.AI_PROVIDER.lower() == "openai"
+            and bool(self.settings.OPENAI_API_KEY)
+            and bool(self.settings.OPENAI_BASE_URL)
+        )
 
     def _forced_route(self, text: str) -> AgentRouteDecision | None:
         compact = re.sub(r"\s+", "", text.lower())
@@ -193,6 +208,62 @@ class AgentRouter:
         if last_error:
             raise last_error
         return None
+
+    def _openai_route_with_retry(self, text: str) -> AgentRouteDecision | None:
+        last_error: Exception | None = None
+        for _ in range(2):
+            try:
+                decision = self._openai_route(text)
+                if decision:
+                    return decision
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+        if last_error:
+            raise last_error
+        return None
+
+    def _openai_route(self, text: str) -> AgentRouteDecision | None:
+        payload = {
+            "model": self.settings.OPENAI_MODEL,
+            "max_tokens": 180,
+            "messages": [
+                {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
+                {"role": "user", "content": f"用户消息：{text}"},
+            ],
+        }
+        req = urllib.request.Request(
+            self.settings.OPENAI_BASE_URL.rstrip("/") + "/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.settings.OPENAI_API_KEY}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:500]
+            raise RuntimeError(f"OpenAI-compatible router HTTP {exc.code}: {detail}") from exc
+
+        choices = data.get("choices") or []
+        raw = ""
+        if choices:
+            message = choices[0].get("message") or {}
+            raw = str(message.get("content") or "").strip()
+        parsed = self._parse_route_json(raw)
+        if not parsed:
+            return None
+        route = str(parsed.get("route") or "").strip().lower()
+        if route not in {ROUTE_DEVELOPMENT, ROUTE_RECORDS, ROUTE_GENERAL}:
+            return None
+        try:
+            confidence = float(parsed.get("confidence", 0.75))
+        except (TypeError, ValueError):
+            confidence = 0.75
+        confidence = min(1.0, max(0.0, confidence))
+        return AgentRouteDecision(route, confidence, str(parsed.get("reason") or "semantic route"), "openai")
 
     def _claude_route(self, text: str) -> AgentRouteDecision | None:
         payload = {

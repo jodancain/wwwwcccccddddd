@@ -50,9 +50,15 @@ class WechatAgentService:
             "entry_talker": entry_talker,
             "bound": bool(entry_talker),
             "transport_mode": "local_polling" if entry_talker else "openclaw_forward",
-            "openclaw_forward_ready": enabled and bool(self.settings.ANTHROPIC_API_KEY),
+            "openclaw_forward_ready": enabled and (
+                bool(self.settings.ANTHROPIC_API_KEY) or bool(self.settings.OPENAI_API_KEY)
+            ),
             "local_polling_ready": bool(entry_talker),
             "permission_mode": self.settings.AGENT_PERMISSION_MODE,
+            "ai_provider": self.settings.AI_PROVIDER,
+            "openai_base_url": self.settings.OPENAI_BASE_URL,
+            "openai_model": self.settings.OPENAI_MODEL,
+            "openai_configured": bool(self.settings.OPENAI_API_KEY),
             "claude_configured": bool(self.settings.ANTHROPIC_API_KEY),
             "claude_model": self.settings.CLAUDE_MODEL,
             "dev_mode_enabled": await self._get_bool_setting(

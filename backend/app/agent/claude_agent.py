@@ -9,6 +9,7 @@ from typing import Any
 
 from loguru import logger
 
+from app.ai.openai_provider import OpenAIProvider
 from app.agent.tools import AgentTools
 from app.config.settings import get_settings
 
@@ -84,14 +85,33 @@ class ClaudeDirectAgent:
     def __init__(self):
         self.settings = get_settings()
 
+    def _openai_compatible_configured(self) -> bool:
+        return (
+            self.settings.AI_PROVIDER.lower() == "openai"
+            and bool(self.settings.OPENAI_API_KEY)
+            and bool(self.settings.OPENAI_BASE_URL)
+        )
+
     async def reply(self, message: str) -> AgentReply:
         stripped = message.strip()
         if not stripped:
             return AgentReply("我收到的是空消息。")
-        if not self.settings.ANTHROPIC_API_KEY:
-            return AgentReply("Claude 还没有配置 API Key。")
+        if not self.settings.ANTHROPIC_API_KEY and not self._openai_compatible_configured():
+            return AgentReply("还没有配置可用的模型 API Key。")
 
         last_error: Exception | None = None
+        if self._openai_compatible_configured():
+            try:
+                text = await self._openai_messages_query(stripped)
+                if text:
+                    return AgentReply(text=text, used_claude=True)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                logger.warning(f"Direct OpenAI-compatible Agent failed, using Claude fallback: {exc}")
+
+        if not self.settings.ANTHROPIC_API_KEY:
+            return AgentReply(self._fallback_model_unavailable_reply(stripped, last_error))
+
         try:
             text = await self._claude_query(stripped)
             if text:
@@ -109,6 +129,14 @@ class ClaudeDirectAgent:
             logger.warning(f"Direct Anthropic Messages API failed: {exc}")
 
         return AgentReply(self._fallback_model_unavailable_reply(stripped, last_error))
+
+    async def _openai_messages_query(self, message: str) -> str:
+        return (
+            await OpenAIProvider().chat(
+                [{"role": "user", "content": message}],
+                system_prompt=DIRECT_SYSTEM_PROMPT,
+            )
+        ).strip()
 
     async def _claude_query(self, message: str) -> str:
         sdk_env = _claude_code_env(self.settings)
@@ -203,6 +231,13 @@ class ClaudeWechatAgent:
         self.tools = tools
         self.settings = get_settings()
 
+    def _openai_compatible_configured(self) -> bool:
+        return (
+            self.settings.AI_PROVIDER.lower() == "openai"
+            and bool(self.settings.OPENAI_API_KEY)
+            and bool(self.settings.OPENAI_BASE_URL)
+        )
+
     async def reply(self, message: str) -> AgentReply:
         stripped = message.strip()
         if not stripped:
@@ -220,6 +255,17 @@ class ClaudeWechatAgent:
             return AgentReply(text=text, pending_action=pending)
 
         local_context = await self._build_relevant_context(stripped)
+        if not self.settings.ANTHROPIC_API_KEY and not self._openai_compatible_configured():
+            return AgentReply(self._fallback_reply(stripped, local_context))
+
+        if self._openai_compatible_configured():
+            try:
+                text = await self._openai_messages_query(stripped, local_context)
+                if text:
+                    return AgentReply(text=text, used_claude=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"OpenAI-compatible Agent failed, using Claude fallback: {exc}")
+
         if not self.settings.ANTHROPIC_API_KEY:
             return AgentReply(self._fallback_reply(stripped, local_context))
 
@@ -407,6 +453,14 @@ class ClaudeWechatAgent:
             if text:
                 chunks.append(text)
         return "\n".join(chunks).strip()
+
+    async def _openai_messages_query(self, message: str, context: dict[str, Any]) -> str:
+        return (
+            await OpenAIProvider().chat(
+                [{"role": "user", "content": self._context_prompt(message, context)}],
+                system_prompt=SYSTEM_PROMPT,
+            )
+        ).strip()
 
     async def _anthropic_messages_query(self, message: str, context: dict[str, Any]) -> str:
         if not self.settings.ANTHROPIC_BASE_URL:
