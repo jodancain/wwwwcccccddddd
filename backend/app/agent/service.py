@@ -269,7 +269,9 @@ class WechatAgentService:
                 "agent_route": {"route": "daily_summary", "confidence": 1.0, "reason": "daily summary preview", "method": "local"},
             }
 
-        if any(word in compact for word in ("现在", "立即", "马上", "发一次", "来一份")) and not any(word in compact for word in ("每天", "每日", "定时")):
+        manual_send = any(word in compact for word in ("现在", "立即", "马上", "发一次", "来一份"))
+        automation_intent = any(word in compact for word in ("以后", "自动", "每天", "定时")) and not manual_send
+        if manual_send and not automation_intent:
             result = await daily_summary_scheduler.run_once(reason="wechat_agent_manual")
             sent = "已发送" if result.get("sent") else "发送失败"
             return {

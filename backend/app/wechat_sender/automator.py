@@ -67,6 +67,58 @@ class WeChatAutomator:
             logger.error(f"Failed to find Weixin window: {e}")
         return False
 
+    def _focus_window(self) -> bool:
+        import win32con
+        import win32gui
+
+        if not self._hwnd or not win32gui.IsWindow(self._hwnd):
+            return False
+
+        try:
+            win32gui.ShowWindow(self._hwnd, win32con.SW_SHOW)
+            win32gui.ShowWindow(self._hwnd, win32con.SW_RESTORE)
+            time.sleep(0.15)
+            win32gui.SetForegroundWindow(self._hwnd)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Direct SetForegroundWindow failed: {exc}")
+
+        try:
+            import win32com.client
+
+            shell = win32com.client.Dispatch("WScript.Shell")
+            shell.SendKeys("%")
+            time.sleep(0.1)
+            win32gui.SetForegroundWindow(self._hwnd)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Alt-unlock SetForegroundWindow failed: {exc}")
+
+        try:
+            import win32api
+            import win32process
+
+            foreground = win32gui.GetForegroundWindow()
+            current_thread = win32api.GetCurrentThreadId()
+            target_thread, _target_pid = win32process.GetWindowThreadProcessId(self._hwnd)
+            foreground_thread, _foreground_pid = win32process.GetWindowThreadProcessId(foreground)
+            attached: list[int] = []
+            for thread_id in {target_thread, foreground_thread}:
+                if thread_id and thread_id != current_thread:
+                    win32process.AttachThreadInput(current_thread, thread_id, True)
+                    attached.append(thread_id)
+            try:
+                win32gui.BringWindowToTop(self._hwnd)
+                win32gui.SetActiveWindow(self._hwnd)
+                win32gui.SetForegroundWindow(self._hwnd)
+                return True
+            finally:
+                for thread_id in attached:
+                    win32process.AttachThreadInput(current_thread, thread_id, False)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Failed to focus Weixin window: {exc}")
+            return False
+
     # ------------------------------------------------------------------
     def send_text(self, contact_name: str, text: str) -> bool:
         if self._send_text_direct(contact_name, text):
@@ -92,9 +144,8 @@ class WeChatAutomator:
 
         try:
             # Restore + focus
-            win32gui.ShowWindow(self._hwnd, win32con.SW_SHOW)
-            win32gui.ShowWindow(self._hwnd, win32con.SW_RESTORE)
-            win32gui.SetForegroundWindow(self._hwnd)
+            if not self._focus_window():
+                return False
             time.sleep(0.3)
 
             # Open search

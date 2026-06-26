@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import urllib.error
 import urllib.request
@@ -45,6 +44,42 @@ class AgentReply:
     used_claude: bool = False
 
 
+def _claude_code_base_url(base_url: str) -> str:
+    """Claude Code SDK expects the provider root, not the /v1 endpoint."""
+    normalized = (base_url or "").strip().rstrip("/")
+    if normalized.lower().endswith("/v1"):
+        return normalized[:-3].rstrip("/")
+    return normalized
+
+
+def _claude_code_env(settings: Any) -> dict[str, str]:
+    env = {
+        "ANTHROPIC_API_KEY": settings.ANTHROPIC_API_KEY,
+        "ANTHROPIC_AUTH_TOKEN": settings.ANTHROPIC_API_KEY,
+    }
+    base_url = _claude_code_base_url(settings.ANTHROPIC_BASE_URL)
+    if base_url:
+        env["ANTHROPIC_BASE_URL"] = base_url
+        env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
+    return env
+
+
+def _model_error_summary(exc: Exception | None) -> str:
+    if exc is None:
+        return "模型没有返回有效文本"
+    detail = str(exc)
+    upper = detail.upper()
+    if "INSUFFICIENT_BALANCE" in upper or "INSUFFICIENT ACCOUNT BALANCE" in upper:
+        return "第三方 Claude 网关余额不足"
+    if "429" in detail or "TOO MANY REQUESTS" in upper:
+        return "模型服务当前限流"
+    if "401" in detail or "UNAUTHORIZED" in upper or "INVALID_API_KEY" in upper:
+        return "模型 API Key 无效或未授权"
+    if "403" in detail or "FORBIDDEN" in upper:
+        return "模型服务拒绝访问"
+    return "模型调用失败"
+
+
 class ClaudeDirectAgent:
     def __init__(self):
         self.settings = get_settings()
@@ -56,11 +91,13 @@ class ClaudeDirectAgent:
         if not self.settings.ANTHROPIC_API_KEY:
             return AgentReply("Claude 还没有配置 API Key。")
 
+        last_error: Exception | None = None
         try:
             text = await self._claude_query(stripped)
             if text:
                 return AgentReply(text=text, used_claude=True)
         except Exception as exc:  # noqa: BLE001
+            last_error = exc
             logger.warning(f"Direct Claude Agent SDK failed, using Messages API fallback: {exc}")
 
         try:
@@ -68,16 +105,13 @@ class ClaudeDirectAgent:
             if text:
                 return AgentReply(text=text, used_claude=True)
         except Exception as exc:  # noqa: BLE001
+            last_error = exc
             logger.warning(f"Direct Anthropic Messages API failed: {exc}")
 
-        return AgentReply("Claude 暂时没有生成回复，请稍后再试。")
+        return AgentReply(self._fallback_model_unavailable_reply(stripped, last_error))
 
     async def _claude_query(self, message: str) -> str:
-        os.environ.setdefault("ANTHROPIC_API_KEY", self.settings.ANTHROPIC_API_KEY)
-        sdk_env = {"ANTHROPIC_API_KEY": self.settings.ANTHROPIC_API_KEY}
-        if self.settings.ANTHROPIC_BASE_URL:
-            os.environ.setdefault("ANTHROPIC_BASE_URL", self.settings.ANTHROPIC_BASE_URL)
-            sdk_env["ANTHROPIC_BASE_URL"] = self.settings.ANTHROPIC_BASE_URL
+        sdk_env = _claude_code_env(self.settings)
         try:
             from claude_agent_sdk import ClaudeAgentOptions, query
         except ImportError:
@@ -131,6 +165,22 @@ class ClaudeDirectAgent:
             if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
                 parts.append(str(block["text"]))
         return "\n".join(parts).strip()
+
+    def _fallback_model_unavailable_reply(self, message: str, exc: Exception | None) -> str:
+        reason = _model_error_summary(exc)
+        compact = re.sub(r"\s+", "", message)
+        if any(word in compact for word in ("推送", "直接发", "发给我", "每日总结", "日总结")):
+            return (
+                f"Claude 当前没有回复成功：{reason}。\n"
+                "说明：OpenClaw/WeixinClawBot 只是微信转发入口；后端 Agent 已收到消息。"
+                "每日总结当前配置为发到“文件传输助手”，你可以发“现在发一次每日总结”触发一次。"
+                "补充 Claude 网关余额或换可用 API Key 后，普通 Claude 对话会自动恢复。"
+            )
+        return (
+            f"Claude 当前没有回复成功：{reason}。\n"
+            "后端 Agent 和微信转发是通的，但模型网关没有可用输出。"
+            "换可用 Claude API Key 或补充当前网关余额后，会自动恢复正常对话。"
+        )
 
     def _message_text(self, item: Any) -> str:
         if isinstance(item, str):
@@ -339,11 +389,7 @@ class ClaudeWechatAgent:
         )
 
     async def _claude_query(self, message: str, context: dict[str, Any]) -> str:
-        os.environ.setdefault("ANTHROPIC_API_KEY", self.settings.ANTHROPIC_API_KEY)
-        sdk_env = {"ANTHROPIC_API_KEY": self.settings.ANTHROPIC_API_KEY}
-        if self.settings.ANTHROPIC_BASE_URL:
-            os.environ.setdefault("ANTHROPIC_BASE_URL", self.settings.ANTHROPIC_BASE_URL)
-            sdk_env["ANTHROPIC_BASE_URL"] = self.settings.ANTHROPIC_BASE_URL
+        sdk_env = _claude_code_env(self.settings)
         try:
             from claude_agent_sdk import ClaudeAgentOptions, query
         except ImportError:
