@@ -205,8 +205,8 @@ class DevAgent:
             return DevAgentResult(
                 "开发模式没有开启。要让我像 Codex 一样读项目、改代码、运行命令，请先在 Agent 控制面板开启开发模式。"
             )
-        if not self.settings.ANTHROPIC_API_KEY or not self.settings.ANTHROPIC_BASE_URL:
-            return DevAgentResult("开发模式需要 ANTHROPIC_API_KEY 和 ANTHROPIC_BASE_URL，当前没有配置完整。")
+        if not self._anthropic_configured() and not self._openai_compatible_configured():
+            return DevAgentResult("开发模式需要配置 Anthropic 或 OpenAI-compatible 模型 API，当前没有配置完整。")
 
         try:
             if "claude_code_plan" in message.lower():
@@ -220,11 +220,24 @@ class DevAgent:
                     text=f"Claude Code planner failed: {plan.get('error') or plan}",
                     used_claude=False,
                 )
-            text, pending = await self._run_tool_loop(message)
+            if self._openai_compatible_configured():
+                text, pending = await self._run_openai_tool_loop(message)
+            else:
+                text, pending = await self._run_tool_loop(message)
             return DevAgentResult(text=text, used_claude=True, pending_actions=pending)
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"DevAgent failed: {exc}")
             return DevAgentResult(f"开发 Agent 执行失败：{exc}")
+
+    def _anthropic_configured(self) -> bool:
+        return bool(self.settings.ANTHROPIC_API_KEY and self.settings.ANTHROPIC_BASE_URL)
+
+    def _openai_compatible_configured(self) -> bool:
+        return (
+            self.settings.AI_PROVIDER.lower() == "openai"
+            and bool(self.settings.OPENAI_API_KEY)
+            and bool(self.settings.OPENAI_BASE_URL)
+        )
 
     def _is_valid_pending_action(self, action: dict[str, Any]) -> bool:
         action_type = action.get("action_type")
@@ -306,6 +319,89 @@ class DevAgent:
             return (last_text + f"\n\n已创建待确认动作：{ids}\n回复 `confirm <id>` 执行。", pending_actions)
         return (last_text or "开发 Agent 已达到最大步骤数，但没有形成最终结果。", pending_actions)
 
+    async def _run_openai_tool_loop(self, message: str) -> tuple[str, list[dict]]:
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": DEV_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"用户需求：{message}\n\n"
+                    f"工作区：{self.workspace}\n"
+                    "请像 Codex 一样先检查项目，再提出可执行结果。"
+                ),
+            },
+        ]
+        pending_actions: list[dict] = []
+        last_text = ""
+
+        for _ in range(max(1, int(self.max_steps))):
+            payload = {
+                "model": self.settings.OPENAI_MODEL,
+                "max_tokens": 2400,
+                "messages": messages,
+                "tools": self._openai_tool_specs(),
+                "tool_choice": "auto",
+            }
+            response = await asyncio.to_thread(self._openai_chat_completions, payload)
+            choices = response.get("choices") or []
+            if not choices:
+                return (last_text or "开发 Agent 没有收到模型回复。", pending_actions)
+            assistant_message = choices[0].get("message") or {}
+            content = str(assistant_message.get("content") or "").strip()
+            if content:
+                last_text = content
+            tool_calls = assistant_message.get("tool_calls") or []
+            if not tool_calls:
+                if pending_actions:
+                    ids = ", ".join(a.get("id", "") for a in pending_actions)
+                    suffix = f"\n\n已创建待确认动作：{ids}\n回复 `确认 {pending_actions[0].get('id', '')}` 执行，或继续告诉我调整。"
+                    return ((last_text or "已生成可确认开发动作。") + suffix, pending_actions)
+                return (last_text or "开发 Agent 没有生成可执行回复。", pending_actions)
+
+            sanitized_calls = []
+            for tool_call in tool_calls:
+                function = tool_call.get("function") or {}
+                sanitized_calls.append(
+                    {
+                        "id": tool_call.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": function.get("name") or "",
+                            "arguments": function.get("arguments") or "{}",
+                        },
+                    }
+                )
+            messages.append({"role": "assistant", "content": content or "", "tool_calls": sanitized_calls})
+
+            for tool_call in sanitized_calls:
+                function = tool_call.get("function") or {}
+                try:
+                    args = json.loads(function.get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                result = await self._run_tool(str(function.get("name") or ""), args)
+                if isinstance(result, dict) and result.get("pending_action"):
+                    action = result["pending_action"]
+                    if self._is_valid_pending_action(action):
+                        pending_actions.append(action)
+                    else:
+                        action_id = str(action.get("id") or "")
+                        if action_id:
+                            await self.db.update_pending_action_status(action_id, "failed")
+                        result = {"ok": False, "error": "invalid empty pending action rejected"}
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id"),
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+
+        if pending_actions:
+            ids = ", ".join(a.get("id", "") for a in pending_actions)
+            return (last_text + f"\n\n已创建待确认动作：{ids}\n回复 `confirm <id>` 执行。", pending_actions)
+        return (last_text or "开发 Agent 已达到最大步骤数，但没有形成最终结果。", pending_actions)
+
     def _anthropic_messages(self, payload: dict[str, Any]) -> dict[str, Any]:
         req = urllib.request.Request(
             self.settings.ANTHROPIC_BASE_URL.rstrip("/") + "/messages",
@@ -323,6 +419,23 @@ class DevAgent:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:1000]
             raise RuntimeError(f"Anthropic HTTP {exc.code}: {detail}") from exc
+
+    def _openai_chat_completions(self, payload: dict[str, Any]) -> dict[str, Any]:
+        req = urllib.request.Request(
+            self.settings.OPENAI_BASE_URL.rstrip("/") + "/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.settings.OPENAI_API_KEY}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:1000]
+            raise RuntimeError(f"OpenAI-compatible HTTP {exc.code}: {detail}") from exc
 
     def _tool_specs(self) -> list[dict[str, Any]]:
         return [
@@ -425,6 +538,19 @@ class DevAgent:
                     "required": ["reason", "command"],
                 },
             },
+        ]
+
+    def _openai_tool_specs(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("input_schema") or {"type": "object", "properties": {}},
+                },
+            }
+            for tool in self._tool_specs()
         ]
 
     async def _run_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:

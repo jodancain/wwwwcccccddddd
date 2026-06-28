@@ -181,6 +181,10 @@ class WechatAgentService:
         if daily_summary_result:
             return daily_summary_result
 
+        health_result = await self._handle_agent_health_question(text)
+        if health_result:
+            return health_result
+
         route = await AgentRouter().decide(text)
         if route.route == ROUTE_DEVELOPMENT:
             agent = DevAgent(db)
@@ -229,6 +233,54 @@ class WechatAgentService:
             "used_claude": reply.used_claude,
             "agent_route": route.to_dict(),
             "pending_action": reply.pending_action,
+        }
+
+    async def _handle_agent_health_question(self, text: str) -> dict | None:
+        compact = re.sub(r"\s+", "", text.lower())
+        health_terms = (
+            "用不了",
+            "不能用",
+            "没反应",
+            "没回复",
+            "不回复",
+            "又挂",
+            "挂了",
+            "恢复了吗",
+            "服务恢复",
+            "为什么又",
+        )
+        explicit_dev_terms = (
+            "/dev",
+            "dev:",
+            "codex:",
+            "claude code:",
+            "修复",
+            "改代码",
+            "修改代码",
+            "新增",
+            "加功能",
+            "优化",
+        )
+        if not any(term in compact for term in health_terms):
+            return None
+        if any(term in compact for term in explicit_dev_terms):
+            return None
+
+        status = await self.status()
+        daily = status.get("daily_summary") or {}
+        model = status.get("openai_model") if status.get("ai_provider") == "openai" else status.get("claude_model")
+        reply = (
+            "我这边服务是在线的。\n"
+            f"- 微信入口：{status.get('transport_mode')}，可用：{status.get('openclaw_forward_ready')}\n"
+            f"- 当前模型：{status.get('ai_provider')} / {model}\n"
+            f"- 聊天记录同步：后端正常，最近每日总结状态：{daily.get('last_status') or '暂无'}\n\n"
+            "刚才“为什么又用不了”这类话容易被当成开发修复任务；现在我会先按状态询问处理。"
+            "普通聊天可以直接问，想强制普通对话也可以用 `/chat 你的问题`。"
+        )
+        return {
+            "status": "ok",
+            "reply": reply,
+            "agent_route": {"route": "health", "confidence": 1.0, "reason": "agent health/status question", "method": "local"},
         }
 
     async def _handle_daily_summary_control(self, text: str) -> dict | None:
