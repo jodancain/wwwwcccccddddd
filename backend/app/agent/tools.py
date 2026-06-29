@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from app.knowledge.embedding import embedding_client
 from app.storage.database import AppDatabase
 
 
@@ -60,6 +61,52 @@ class AgentTools:
     async def search_messages(self, query: str, talker: str = "", limit: int = 50) -> list[dict]:
         items = await self.db.search_messages(query, talker=talker, limit=min(max(limit, 1), 200))
         return [compact_message(item) for item in items]
+
+    async def search_knowledge(self, query: str, talker: str = "", limit: int = 8) -> list[dict]:
+        bounded_limit = min(max(limit, 1), 20)
+        items = await self.db.search_knowledge(query, talker=talker, limit=bounded_limit)
+        if embedding_client.configured:
+            try:
+                vectors = await embedding_client.embed_texts([query])
+                vector_items = await self.db.search_knowledge_vector(
+                    vectors[0],
+                    model=embedding_client.model,
+                    talker=talker,
+                    limit=bounded_limit,
+                )
+                merged = {int(item.get("id") or 0): item for item in items}
+                for item in vector_items:
+                    merged.setdefault(int(item.get("id") or 0), item)
+                items = sorted(
+                    merged.values(),
+                    key=lambda item: (
+                        1 if item.get("retrieval") == "embedding" else 0,
+                        float(item.get("score") or 0),
+                        int(item.get("end_time") or 0),
+                    ),
+                    reverse=True,
+                )[:bounded_limit]
+            except Exception:
+                pass
+        out = []
+        for item in items:
+            metadata = item.get("metadata") or {}
+            out.append(
+                {
+                    "id": item.get("id"),
+                    "talker": item.get("talker", ""),
+                    "name": metadata.get("name") or item.get("title") or item.get("talker", ""),
+                    "title": item.get("title", ""),
+                    "text": item.get("text", ""),
+                    "start_message_id": item.get("start_message_id", 0),
+                    "end_message_id": item.get("end_message_id", 0),
+                    "start_time": item.get("start_time", 0),
+                    "end_time": item.get("end_time", 0),
+                    "message_count": item.get("message_count", 0),
+                    "score": item.get("score", 0),
+                }
+            )
+        return out
 
     async def create_send_confirmation(self, contact_name: str, content: str) -> dict:
         action_id = str(uuid.uuid4())[:8]

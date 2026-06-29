@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     OPENAI_MODEL: str = "gpt-4o"
 
+    # Knowledge-base embeddings. Empty key/base reuse the OpenAI-compatible
+    # chat settings, which also works for Zeabur AI Hub.
+    EMBEDDING_ENABLED: bool = True
+    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_BASE_URL: str = ""
+    EMBEDDING_MODEL: str = "local-hash-768"
+    EMBEDDING_BATCH_SIZE: int = 64
+
     # AI provider: "gemini" or "openai"
     AI_PROVIDER: str = "gemini"
 
@@ -46,7 +54,7 @@ class Settings(BaseSettings):
     # Daily WeChat summary scheduler
     DAILY_SUMMARY_ENABLED: bool = False
     DAILY_SUMMARY_TIME: str = "09:00"
-    DAILY_SUMMARY_RECEIVER: str = "文件传输助手"
+    DAILY_SUMMARY_RECEIVER: str = "WeixinClawBot"
     DAILY_SUMMARY_HOURS: int = 24
     DAILY_SUMMARY_MAX_MESSAGES: int = 50000
 

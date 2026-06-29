@@ -184,6 +184,14 @@ class SyncEngine:
                     logger.info(f"Synced {inserted} new messages")
 
                     try:
+                        from app.knowledge.indexer import knowledge_indexer
+
+                        index_result = await knowledge_indexer.index_new_messages(limit=max(5000, inserted * 2))
+                        logger.info(f"Knowledge index updated after sync: {index_result}")
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(f"Knowledge indexing after sync failed: {e}")
+
+                    try:
                         from app.agent.service import wechat_agent_service
 
                         result = await wechat_agent_service.process_entry_messages()

@@ -33,7 +33,7 @@ class OpenAIProvider(AIProvider):
             model=self.model,
             messages=msgs,
             temperature=0.7,
-            max_tokens=4096,
+            max_tokens=8192,
         )
         return response.choices[0].message.content or ""
 
@@ -45,7 +45,7 @@ class OpenAIProvider(AIProvider):
             model=self.model,
             messages=msgs,
             temperature=0.7,
-            max_tokens=4096,
+            max_tokens=8192,
             stream=True,
         )
         async for chunk in stream:

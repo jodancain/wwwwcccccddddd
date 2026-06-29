@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from loguru import logger
 
@@ -13,6 +16,7 @@ from app.ai.openai_provider import OpenAIProvider
 from app.ai.provider_base import AIProvider
 from app.config.settings import get_settings
 from app.dependencies import get_db
+from app.knowledge.source_extractor import source_extractor
 from app.wechat_sender.automator import WeChatAutomator
 
 
@@ -168,11 +172,8 @@ class DailySummaryScheduler:
             try:
                 config = await self.get_config()
                 text = await self.generate_summary(config=config)
-                sent = await asyncio.to_thread(
-                    self.automator.send_text,
-                    config.receiver,
-                    text,
-                )
+                send_result = await asyncio.to_thread(self._send_summary, config.receiver, text)
+                sent = bool(send_result.get("sent"))
                 self._last_status = "sent" if sent else "send_failed"
                 result = {
                     "status": self._last_status,
@@ -180,6 +181,9 @@ class DailySummaryScheduler:
                     "receiver": config.receiver,
                     "length": len(text),
                     "sent": sent,
+                    "send_method": send_result.get("method", ""),
+                    "message_id": send_result.get("message_id", ""),
+                    "send_error": send_result.get("error", ""),
                 }
                 await db.add_agent_audit("daily_summary_run", result)
                 return result
@@ -190,6 +194,81 @@ class DailySummaryScheduler:
                 await db.add_agent_audit("daily_summary_failed", result)
                 logger.exception(f"Daily summary failed: {exc}")
                 return result
+
+    def _send_summary(self, receiver: str, text: str) -> dict:
+        if self._is_weixin_bot_receiver(receiver):
+            result = self._send_via_openclaw_weixin(text)
+            if result.get("sent"):
+                return result
+            logger.warning(f"OpenClaw bot delivery failed, falling back to WeChat automator: {result.get('error')}")
+
+        sent = self.automator.send_text(receiver, text)
+        return {"sent": sent, "method": "wechat_automator"}
+
+    def _is_weixin_bot_receiver(self, receiver: str) -> bool:
+        normalized = (receiver or "").strip().lower()
+        return normalized in {
+            "weixinclawbot",
+            (self.settings.AGENT_WECHAT_ENTRY_NAME or "").strip().lower(),
+            "bot",
+        }
+
+    def _send_via_openclaw_weixin(self, text: str) -> dict:
+        try:
+            account_id, target = self._resolve_openclaw_weixin_target()
+            cli = Path.home() / "AppData" / "Roaming" / "npm" / "node_modules" / "openclaw" / "openclaw.mjs"
+            command = [
+                "node",
+                str(cli),
+                "message",
+                "send",
+                "--channel",
+                "openclaw-weixin",
+                "--account",
+                account_id,
+                "--target",
+                target,
+                "--message",
+                text,
+                "--json",
+            ]
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+            )
+            if completed.returncode != 0:
+                return {
+                    "sent": False,
+                    "method": "openclaw-weixin",
+                    "error": (completed.stderr or completed.stdout or "").strip()[-1000:],
+                }
+            payload = json.loads(completed.stdout or "{}")
+            message_id = str(payload.get("messageId") or payload.get("payload", {}).get("result", {}).get("messageId") or "")
+            return {"sent": bool(message_id), "method": "openclaw-weixin", "message_id": message_id}
+        except Exception as exc:  # noqa: BLE001
+            return {"sent": False, "method": "openclaw-weixin", "error": str(exc)}
+
+    def _resolve_openclaw_weixin_target(self) -> tuple[str, str]:
+        base = Path.home() / ".openclaw" / "openclaw-weixin"
+        accounts_path = base / "accounts.json"
+        account_ids = json.loads(accounts_path.read_text(encoding="utf-8"))
+        if not account_ids:
+            raise RuntimeError("OpenClaw Weixin has no configured accounts")
+        account_id = str(account_ids[0])
+        account = json.loads((base / "accounts" / f"{account_id}.json").read_text(encoding="utf-8"))
+        target = str(account.get("userId") or "")
+        if not target:
+            tokens_path = base / "accounts" / f"{account_id}.context-tokens.json"
+            tokens = json.loads(tokens_path.read_text(encoding="utf-8"))
+            target = next(iter(tokens.keys()), "")
+        if not target:
+            raise RuntimeError("OpenClaw Weixin target userId was not found")
+        return account_id, target
 
     async def generate_summary(self, config: DailySummaryConfig | None = None) -> str:
         config = config or await self.get_config()
@@ -202,15 +281,39 @@ class DailySummaryScheduler:
         if not messages:
             return f"最近 {hours} 小时没有同步到新的微信聊天记录。"
 
+        messages = await source_extractor.enrich_messages(db, messages, max_links=80, max_images=20)
         provider = self._get_provider()
         context = build_global_context(messages)
         user_msg = (
-            f"请总结最近 {hours} 小时所有微信聊天记录。"
-            "输出要适合直接发到微信：先给一句话总览，然后列出重要对话、待办、风险和需要我回复的人。"
+            f"请生成最近 {hours} 小时所有微信聊天记录的详细版日报。"
+            "这份日报会直接发到微信，但不要过短；目标是让我不用翻聊天记录也能掌握重点。"
+            "请至少写 3000 个中文字符，除非聊天记录本身非常少。"
+            "必须按群/联系人展开 12-20 个重点对话；每个重点对话写清楚具体内容、关键观点、风险、是否需要我回复。"
+            "投资、项目合作、求职、金钱、时间安排、需要我行动的内容优先。"
+            "不要只写宽泛分类；要给出具体群名/联系人、日期时间线索、关键词和建议动作。"
+            "如果某些对话只是闲聊，请明确标成低优先级。"
         )
         ai_messages = [{"role": "user", "content": f"{context}\n\n{user_msg}"}]
         try:
             summary = await provider.chat(ai_messages, system_prompt=GLOBAL_SUMMARY_SYSTEM_PROMPT)
+            if len(summary.strip()) < 2800 and len(messages) > 500:
+                expand_msg = (
+                    f"{context}\n\n"
+                    "下面是刚生成的日报，但太短，不够详细：\n"
+                    f"{summary}\n\n"
+                    "请基于同一批聊天记录重写为更详细的微信日报。要求："
+                    "1. 至少 3000 个中文字符；"
+                    "2. 重点对话不少于 12 个；"
+                    "3. 每个重点对话写 2-4 条具体信息；"
+                    "4. 待办、风险、机会、明天关注事项要更具体；"
+                    "5. 不要说空话，不要只概括主题。"
+                )
+                summary = await provider.chat(
+                    [{"role": "user", "content": expand_msg}],
+                    system_prompt=GLOBAL_SUMMARY_SYSTEM_PROMPT,
+                )
+            if len(summary.strip()) < 3500 and len(messages) > 500:
+                summary = summary.strip() + "\n\n" + self._local_detail_appendix(messages)
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Daily summary AI generation failed: {exc}")
             summary = fallback_global_summary(messages, hours, exc)
@@ -218,6 +321,40 @@ class DailySummaryScheduler:
         header = f"每日微信总结｜最近 {hours} 小时"
         body = summary.strip() or "今天没有生成有效总结。"
         return f"{header}\n\n{body}"
+
+    def _local_detail_appendix(self, messages: list[dict], max_chats: int = 10) -> str:
+        grouped: dict[str, list[dict]] = {}
+        names: dict[str, str] = {}
+        for msg in messages:
+            talker = msg.get("talker") or "unknown"
+            grouped.setdefault(talker, []).append(msg)
+            names.setdefault(talker, msg.get("remark") or msg.get("nickname") or talker)
+
+        ranked = sorted(
+            grouped.items(),
+            key=lambda item: (len(item[1]), int(item[1][-1].get("create_time") or 0)),
+            reverse=True,
+        )[:max_chats]
+        lines = ["## 更多会话线索（本地记录补充）", "下面是按活跃度补充的真实聊天片段，方便你回头定位："]
+        for talker, items in ranked:
+            name = names.get(talker) or talker
+            last = items[-1]
+            last_time = self._fmt_msg_time(last.get("create_time"))
+            lines.append(f"\n### {name}（{len(items)} 条，最后 {last_time}）")
+            for msg in items[-5:]:
+                speaker = "我" if msg.get("is_sender") else (msg.get("sender") or name)
+                content = (msg.get("content") or msg.get("display_content") or f"[{msg.get('type_name') or '消息'}]").strip()
+                content = " ".join(content.split())
+                if len(content) > 100:
+                    content = content[:100] + "..."
+                lines.append(f"- {self._fmt_msg_time(msg.get('create_time'))} {speaker}: {content}")
+        return "\n".join(lines)
+
+    def _fmt_msg_time(self, value) -> str:
+        try:
+            return datetime.fromtimestamp(int(value or 0)).strftime("%m-%d %H:%M")
+        except Exception:  # noqa: BLE001
+            return ""
 
     def _get_provider(self) -> AIProvider:
         settings = get_settings()

@@ -31,10 +31,11 @@ DIRECT_SYSTEM_PROMPT = """你是 WeChatAI 微信入口里的直接 Claude 助手
 OpenClaw / WeixinClawBot 只是消息转发入口；用户是在和本地 Agent 对话。
 
 回答规则：
-1. 普通对话直接回答，不要说自己只是 OpenClaw。
-2. 如果用户要查微信聊天记录，应简短提示可以直接问“总结最近聊天记录”或指定联系人；实际记录查询由上层路由处理。
-3. 如果用户要修改项目、修复问题、运行测试、加功能，应简短提示这会交给开发 Agent；实际开发执行由上层路由处理。
-4. 中文优先，回答简洁。
+1. 普通对话直接回答，不要说自己只是 OpenClaw，也不要把自己降级成“只能检索数据库”的机器人。
+2. 结合最近几轮对话理解省略语，例如“那这个呢”“继续”“详细点”“发给我”。
+3. 如果用户要查微信聊天记录，不要让用户换问法；说明你会按聊天记录入口处理，除非确实缺少联系人/范围。
+4. 如果用户要修改项目、修复问题、运行测试、加功能，应简短说明会交给开发 Agent，不要假装已经执行。
+5. 中文优先，回答要像一个能思考的助手：先给结论，再给必要依据。
 """
 
 
@@ -92,7 +93,7 @@ class ClaudeDirectAgent:
             and bool(self.settings.OPENAI_BASE_URL)
         )
 
-    async def reply(self, message: str) -> AgentReply:
+    async def reply(self, message: str, dialog_history: list[dict] | None = None) -> AgentReply:
         stripped = message.strip()
         if not stripped:
             return AgentReply("我收到的是空消息。")
@@ -102,7 +103,7 @@ class ClaudeDirectAgent:
         last_error: Exception | None = None
         if self._openai_compatible_configured():
             try:
-                text = await self._openai_messages_query(stripped)
+                text = await self._openai_messages_query(stripped, dialog_history or [])
                 if text:
                     return AgentReply(text=text, used_claude=True)
             except Exception as exc:  # noqa: BLE001
@@ -113,7 +114,7 @@ class ClaudeDirectAgent:
             return AgentReply(self._fallback_model_unavailable_reply(stripped, last_error))
 
         try:
-            text = await self._claude_query(stripped)
+            text = await self._claude_query(stripped, dialog_history or [])
             if text:
                 return AgentReply(text=text, used_claude=True)
         except Exception as exc:  # noqa: BLE001
@@ -121,7 +122,7 @@ class ClaudeDirectAgent:
             logger.warning(f"Direct Claude Agent SDK failed, using Messages API fallback: {exc}")
 
         try:
-            text = await self._anthropic_messages_query(stripped)
+            text = await self._anthropic_messages_query(stripped, dialog_history or [])
             if text:
                 return AgentReply(text=text, used_claude=True)
         except Exception as exc:  # noqa: BLE001
@@ -130,15 +131,24 @@ class ClaudeDirectAgent:
 
         return AgentReply(self._fallback_model_unavailable_reply(stripped, last_error))
 
-    async def _openai_messages_query(self, message: str) -> str:
+    def _direct_prompt(self, message: str, dialog_history: list[dict]) -> str:
+        history = dialog_history[-8:] if dialog_history else []
+        return (
+            f"最近对话历史 JSON：\n{json.dumps(history, ensure_ascii=False, indent=2)}\n\n"
+            f"用户当前消息：{message}\n\n"
+            "请结合最近对话历史回答当前消息。若当前消息明显承接上一轮，例如“继续/详细点/这个呢/为什么”，"
+            "必须补全指代后回答。"
+        )
+
+    async def _openai_messages_query(self, message: str, dialog_history: list[dict]) -> str:
         return (
             await OpenAIProvider().chat(
-                [{"role": "user", "content": message}],
+                [{"role": "user", "content": self._direct_prompt(message, dialog_history)}],
                 system_prompt=DIRECT_SYSTEM_PROMPT,
             )
         ).strip()
 
-    async def _claude_query(self, message: str) -> str:
+    async def _claude_query(self, message: str, dialog_history: list[dict]) -> str:
         sdk_env = _claude_code_env(self.settings)
         try:
             from claude_agent_sdk import ClaudeAgentOptions, query
@@ -152,13 +162,13 @@ class ClaudeDirectAgent:
             model=self.settings.CLAUDE_MODEL,
             env=sdk_env,
         )
-        async for item in query(prompt=message, options=options):
+        async for item in query(prompt=self._direct_prompt(message, dialog_history), options=options):
             text = self._message_text(item)
             if text:
                 chunks.append(text)
         return "\n".join(chunks).strip()
 
-    async def _anthropic_messages_query(self, message: str) -> str:
+    async def _anthropic_messages_query(self, message: str, dialog_history: list[dict]) -> str:
         if not self.settings.ANTHROPIC_BASE_URL:
             return ""
 
@@ -167,7 +177,7 @@ class ClaudeDirectAgent:
                 "model": self.settings.CLAUDE_MODEL,
                 "max_tokens": 1200,
                 "system": DIRECT_SYSTEM_PROMPT,
-                "messages": [{"role": "user", "content": message}],
+                "messages": [{"role": "user", "content": self._direct_prompt(message, dialog_history)}],
             },
             ensure_ascii=False,
         ).encode("utf-8")
@@ -238,7 +248,7 @@ class ClaudeWechatAgent:
             and bool(self.settings.OPENAI_BASE_URL)
         )
 
-    async def reply(self, message: str) -> AgentReply:
+    async def reply(self, message: str, dialog_history: list[dict] | None = None) -> AgentReply:
         stripped = message.strip()
         if not stripped:
             return AgentReply("我收到的是空消息。你可以问我：总结最近聊天记录、搜索关键词、查某个人或某个群的记录。")
@@ -254,7 +264,7 @@ class ClaudeWechatAgent:
             )
             return AgentReply(text=text, pending_action=pending)
 
-        local_context = await self._build_relevant_context(stripped)
+        local_context = await self._build_relevant_context(stripped, dialog_history or [])
         if not self.settings.ANTHROPIC_API_KEY and not self._openai_compatible_configured():
             return AgentReply(self._fallback_reply(stripped, local_context))
 
@@ -285,19 +295,25 @@ class ClaudeWechatAgent:
 
         return AgentReply(self._fallback_reply(stripped, local_context))
 
-    async def _build_relevant_context(self, message: str) -> dict[str, Any]:
-        query = self._extract_query(message)
+    async def _build_relevant_context(self, message: str, dialog_history: list[dict] | None = None) -> dict[str, Any]:
+        expanded_message = self._expand_followup_message(message, dialog_history or [])
+        query = self._extract_query(expanded_message)
         hours = self._extract_recent_hours(message)
+        knowledge_query = self._knowledge_query(expanded_message, query)
+        query_candidates = self._query_candidates(expanded_message, query, knowledge_query)
 
-        if self._is_global_records_request(message, query):
+        if self._is_global_records_request(expanded_message, query):
             recent = await self.tools.global_recent_messages(hours=hours, limit=220)
             if not recent and 0 < hours < 168:
                 hours = 168
                 recent = await self.tools.global_recent_messages(hours=hours, limit=220)
             overview = await self.tools.global_message_overview()
+            knowledge_hits = await self._search_knowledge_candidates(query_candidates, limit=12)
             return {
                 "scope": "all_conversations_all_history" if hours <= 0 else "all_conversations_recent",
                 "query": query,
+                "expanded_message": expanded_message,
+                "query_candidates": query_candidates,
                 "hours": hours,
                 "range": "全部已同步聊天记录" if hours <= 0 else f"最近 {hours} 小时",
                 "overview": overview,
@@ -305,20 +321,25 @@ class ClaudeWechatAgent:
                 "selected_talker": "",
                 "recent_messages": recent,
                 "search_hits": [],
+                "knowledge_hits": knowledge_hits,
             }
 
-        conversations = await self.tools.search_conversations(query or message, limit=6)
+        conversations = await self.tools.search_conversations(query or expanded_message, limit=6)
         talker = self._select_talker(query, conversations)
-        search_hits = await self.tools.search_messages(query or message, talker=talker, limit=50)
+        search_hits = await self.tools.search_messages(query or expanded_message, talker=talker, limit=50)
         recent = await self.tools.recent_messages(talker, limit=100) if talker else []
+        knowledge_hits = await self._search_knowledge_candidates(query_candidates, talker=talker, limit=12)
         return {
             "scope": "selected_conversation" if talker else "search",
             "query": query,
+            "expanded_message": expanded_message,
+            "query_candidates": query_candidates,
             "hours": hours,
             "conversations": conversations,
             "selected_talker": talker,
             "recent_messages": recent,
             "search_hits": search_hits,
+            "knowledge_hits": knowledge_hits,
         }
 
     def _select_talker(self, query: str, conversations: list[dict]) -> str:
@@ -330,10 +351,67 @@ class ClaudeWechatAgent:
                 return item["talker"]
         return ""
 
+    def _expand_followup_message(self, message: str, dialog_history: list[dict]) -> str:
+        compact = re.sub(r"\s+", "", message)
+        followup_words = {"继续", "详细点", "展开", "说细点", "这个呢", "那这个呢", "为什么", "还有呢", "然后呢", "再说说"}
+        if compact not in followup_words and len(compact) > 12:
+            return message
+        for item in reversed(dialog_history[-8:]):
+            content = str(item.get("content") or "").strip()
+            role = str(item.get("role") or "")
+            if role == "user" and content and content != message:
+                return f"上一轮用户问题：{content}\n当前追问：{message}"
+        return message
+
+    def _query_candidates(self, message: str, query: str, knowledge_query: str) -> list[str]:
+        candidates: list[str] = []
+        for value in (knowledge_query, query, message):
+            value = (value or "").strip()
+            if value and value not in candidates:
+                candidates.append(value)
+
+        cleaned = re.sub(
+            r"(最近|今天|昨天|这周|本周|这几天|大家|群里|微信|有没有|是否|关于|有关|对|有什么看法|看法|观点|怎么看|态度|反应|帮我|综合一下|总结一下|总结|聊了什么|聊什么|都聊了啥|都聊什么|聊天记录|记录)",
+            " ",
+            message,
+        )
+        cleaned = re.sub(r"[，。！？?、；;：:\s]+", " ", cleaned).strip()
+        if cleaned and cleaned not in candidates:
+            candidates.append(cleaned)
+
+        parts = [p.strip() for p in re.split(r"[和与及、,，/]+", cleaned) if len(p.strip()) >= 2]
+        for part in parts[:6]:
+            if part not in candidates:
+                candidates.append(part)
+        return candidates[:8]
+
+    async def _search_knowledge_candidates(self, candidates: list[str], talker: str = "", limit: int = 12) -> list[dict]:
+        merged: dict[int, dict] = {}
+        for candidate in candidates:
+            if not candidate.strip():
+                continue
+            for item in await self.tools.search_knowledge(candidate, talker=talker, limit=limit):
+                item_id = int(item.get("id") or 0)
+                if not item_id:
+                    continue
+                if item_id not in merged:
+                    item["matched_query"] = candidate
+                    merged[item_id] = item
+        return sorted(
+            merged.values(),
+            key=lambda item: (
+                float(item.get("score") or 0),
+                int(item.get("end_time") or 0),
+            ),
+            reverse=True,
+        )[:limit]
+
     def _is_global_records_request(self, message: str, query: str) -> bool:
         text = re.sub(r"\s+", "", message)
         if any(word in text for word in ("我和", "跟", "和谁", "哪个群", "某个", "联系人")):
             return False
+        if self._is_time_range_only_records_request(text):
+            return True
         record_words = (
             "聊天记录",
             "聊天纪录",
@@ -354,6 +432,13 @@ class ClaudeWechatAgent:
             return True
         return query in {"聊天记录", "最近聊天记录", "最近聊天", "微信聊天记录", "微信重点"}
 
+    def _is_time_range_only_records_request(self, text: str) -> bool:
+        if any(word in text for word in ("今天", "昨天", "这周", "上周", "最近一周")):
+            return True
+        if re.fullmatch(r"最近\d+(?:个)?(?:小时|天|周|月)(?:的)?", text):
+            return True
+        return False
+
     def _extract_recent_hours(self, message: str) -> int:
         text = message.replace(" ", "")
         if any(word in text for word in ("全部", "所有", "全量", "全库", "完整", "历史", "以前")):
@@ -366,10 +451,12 @@ class ClaudeWechatAgent:
             return 48
         if "最近一周" in text or "这周" in text or "7天" in text:
             return 168
-        match = re.search(r"最近(\d+)\s*(小时|天)", message)
+        match = re.search(r"最近(\d+)\s*(小时|天|周|月)", message)
         if match:
             amount = int(match.group(1))
-            return min(720, amount if match.group(2) == "小时" else amount * 24)
+            unit = match.group(2)
+            multiplier = {"小时": 1, "天": 24, "周": 168, "月": 720}[unit]
+            return min(720, amount * multiplier)
         return 0
 
     def _extract_query(self, message: str) -> str:
@@ -388,7 +475,22 @@ class ClaudeWechatAgent:
                     return value
         if self._looks_like_generic_records_question(text):
             return "最近聊天记录"
+        if self._is_time_range_only_records_request(re.sub(r"\s+", "", text)):
+            return "最近聊天记录"
         return text[:40]
+
+    def _knowledge_query(self, message: str, query: str) -> str:
+        text = re.sub(r"\s+", "", message)
+        generic = {
+            "聊天记录",
+            "最近聊天记录",
+            "最近聊天",
+            "微信聊天记录",
+            "微信重点",
+        }
+        if query in generic or self._is_time_range_only_records_request(text):
+            return ""
+        return query or message
 
     def _looks_like_generic_records_question(self, text: str) -> bool:
         compact = re.sub(r"\s+", "", text)
@@ -426,7 +528,14 @@ class ClaudeWechatAgent:
             f"用户问题：{message}\n\n"
             f"本次检索范围：{context.get('scope')}\n"
             f"可用本地检索结果 JSON：\n{json.dumps(context, ensure_ascii=False, indent=2)}\n\n"
-            "请基于这些本地结果回答。"
+            "请像一个聪明的微信聊天记录分析 agent 一样回答：先判断用户真实意图，再综合证据，不要机械复述检索片段。"
+            "knowledge_hits 是长期知识库/RAG 检索命中的聊天块；只要 knowledge_hits 非空，就代表已经找到相关聊天内容，"
+            "必须基于这些知识块回答，不能说没有找到。可以按 title/name 引用来源。"
+            "search_hits 为空不等于没找到，因为长期知识库可能已经命中。"
+            "query_candidates 是系统根据用户自然语言自动改写出来的检索词，matched_query 表示该片段由哪个查询命中。"
+            "回答时优先使用 message_count 多、时间新、与用户问题最贴近的片段；如果命中分散，要合并成主题，而不是逐条罗列。"
+            "格式建议：一句话结论；然后 3-6 个要点，每个要点带来源群/联系人和日期；最后只在确实需要时提出下一步可追问。"
+            "如果用户问“最近/大家/有没有聊”，默认是在问所有微信聊天记录，不要只看 WeixinClawBot 入口这一个会话。"
             "如果 scope 是 all_conversations_all_history，请理解为用户要看所有会话的全部已同步聊天记录，"
             "overview 覆盖全量统计，recent_messages 是为控制上下文而抽取的最新代表消息。"
             "如果 scope 是 all_conversations_recent，请理解为用户要看所有会话的指定时间范围聊天记录，"
@@ -516,6 +625,7 @@ class ClaudeWechatAgent:
         conversations = context.get("conversations") or []
         recent = context.get("recent_messages") or []
         hits = context.get("search_hits") or []
+        knowledge_hits = context.get("knowledge_hits") or []
 
         if context.get("scope") in {"all_conversations_recent", "all_conversations_all_history"}:
             if not recent:
@@ -535,7 +645,13 @@ class ClaudeWechatAgent:
             return "\n".join(lines)
 
         if not conversations and not hits:
-            return "我还没在已同步聊天记录里找到相关内容。可以先确认微信已经同步，或把联系人/群名说得更精确一点。"
+            if knowledge_hits:
+                lines = [f"我先从知识库里找到这些相关片段（问题：{message}）："]
+                for item in knowledge_hits[:6]:
+                    snippet = (item.get("text") or "").replace("\n", " ")[:180]
+                    lines.append(f"- {item.get('title') or item.get('name')}：{snippet}")
+                return "\n".join(lines)
+            return "我还没在已同步聊天记录或知识库里找到相关内容。可以先确认微信已经同步，或把联系人/群名说得更精确一点。"
 
         if len(conversations) > 1 and not context.get("selected_talker"):
             lines = ["我找到多个可能的会话，请你指定一个："]

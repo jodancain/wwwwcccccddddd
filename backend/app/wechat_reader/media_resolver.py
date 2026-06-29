@@ -32,13 +32,19 @@ class WeChatMediaResolver:
             if p.exists():
                 return p
 
-        base = Path.home() / "Documents" / "WeChat Files"
-        if base.exists():
-            for child in base.iterdir():
-                p = child / "FileStorage" / "MsgAttach"
-                if p.exists():
-                    return p
+        for base in self._candidate_wx_roots():
+            if base.exists():
+                for child in base.iterdir():
+                    p = child / "FileStorage" / "MsgAttach"
+                    if p.exists():
+                        return p
         return None
+
+    def _candidate_wx_roots(self) -> list[Path]:
+        return [
+            Path.home() / "Documents" / "WeChat Files",
+            Path.home() / "OneDrive" / "xwechat_files",
+        ]
 
     def _extract_image_path_from_bytes_extra(self, bytes_extra: object) -> list[Path]:
         if not bytes_extra:
@@ -54,13 +60,14 @@ class WeChatMediaResolver:
             flags=re.IGNORECASE,
         )
         out: list[Path] = []
+        roots = self._candidate_wx_roots()
         for rel in rel_paths:
             clean = rel
             if ".dat" in clean.lower():
                 idx = clean.lower().find(".dat")
                 clean = clean[: idx + 4]
-            p = Path.home() / "Documents" / "WeChat Files" / Path(clean)
-            out.append(p)
+            for root in roots:
+                out.append(root / Path(clean))
         return out
 
     def _extract_hash_keys_from_xml(self, content: str) -> list[str]:

@@ -26,26 +26,47 @@ SUGGEST_REPLY_PROMPT = """根据以上微信对话内容，生成 3 条合适的
 4. 不要添加额外解释。"""
 
 
-GLOBAL_SUMMARY_SYSTEM_PROMPT = """你是一个智能微信助手，可以读取用户所有微信对话的消息记录。
+GLOBAL_SUMMARY_SYSTEM_PROMPT = """你是用户的私人微信情报分析助手，可以读取用户所有微信对话的消息记录。
+用户要的是“详细日报”，不是泛泛摘要。请只基于提供的聊天记录输出，不要编造。
 
-用户请你总结所有聊天内容。请按以下格式输出：
+输出要求：
+1. 中文输出，信息密度高，默认写详细版，除非用户明确说“简短”。
+2. 不要只写“讨论了投资/汽车/生活”这种空话；要写清楚谁/哪个群、在聊什么、出现了哪些具体事实、观点、分歧、风险、待回复点。
+3. 对重要群聊或私聊按“群/联系人”展开，每个重要对话至少 2-4 条具体要点。
+4. 对投资、项目、合作、求职、钱、时间安排、需要回复的人优先级更高。
+5. 如果某条内容需要用户行动，要说明“为什么需要跟进”和“建议怎么回/怎么做”。
+6. 可以引用少量关键原话或关键词，但不要大段复制聊天记录。
+7. 如果信息不足，要说明不足在哪里，不要硬凑。
 
-## 总览
-简要概述这段时间的聊天活动情况，包括活跃对话数和主要话题。
+请按以下结构输出：
 
-## 重要对话
-按重要程度列出值得关注的对话，每个对话包含联系人或群名、主要内容、是否需要回复或跟进。
+## 一句话总览
+用 1-2 句说明过去 24 小时最重要的变化和风险。
 
-## 待办事项
-提取所有需要用户采取行动的事项。
+## 数据概览
+写明对话数、消息数、最活跃的几个会话，以及主要主题。
 
-## 关键信息
-提取重要的时间、地点、数字、链接等关键信息。
+## 重点对话详解
+按重要程度列出 8-15 个对话。每个对话使用：
+### 群/联系人名
+- 发生了什么：具体说明。
+- 关键观点/信息：列出具体事实、数字、链接、人物、项目或讨论分歧。
+- 需要你做什么：无需/需关注/需回复/需决策，并给一句建议。
 
-请用中文输出，简洁明了，突出重点。"""
+## 主题归纳
+按主题归纳，例如：求职、人际、汽车、投资、项目、生活。每个主题写具体内容和来源会话。
+
+## 待办和需要回复
+列出明确待办、潜在待办、建议回复对象。没有也要说“暂无明确必须回复”。
+
+## 风险和机会
+列出投资风险、项目风险、关系风险、信息机会。
+
+## 明天建议关注
+给 3-8 条明天应关注的事项。"""
 
 
-def build_global_context(messages: list[dict], max_chars: int = 120000) -> str:
+def build_global_context(messages: list[dict], max_chars: int = 180000) -> str:
     """Build context from messages across all conversations."""
     if not messages:
         return "没有聊天记录。"
@@ -74,11 +95,15 @@ def build_global_context(messages: list[dict], max_chars: int = 120000) -> str:
         chat_type = "群聊" if is_group else "私聊"
         lines = [f"\n===== {name} ({chat_type}, {len(msgs)} 条消息) ====="]
 
-        # Keep recent detail for each chat; huge global summaries otherwise hit model limits.
-        for msg in msgs[-80:]:
+        # Keep enough recent detail for a useful daily report while staying under
+        # the global prompt budget.
+        for msg in msgs[-160:]:
             content = (msg.get("content") or "").strip()
             if not content:
                 content = f"[{msg.get('type_name') or '消息'}]"
+            details = _source_details(msg, limit=700)
+            if details:
+                content = f"{content}\n{details}"
             ts = msg.get("create_time", 0)
             time_str = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else ""
             if msg.get("is_sender"):
@@ -157,6 +182,9 @@ def _format_messages(messages: list[dict], talker_name: str, is_group: bool) -> 
         content = (msg.get("content") or "").strip()
         if not content:
             content = f"[{msg.get('type_name') or '消息'}]"
+        details = _source_details(msg, limit=700)
+        if details:
+            content = f"{content}\n{details}"
 
         if msg.get("is_sender"):
             direction = "[我]"
@@ -167,6 +195,19 @@ def _format_messages(messages: list[dict], talker_name: str, is_group: bool) -> 
 
         lines.append(f"{time_str} {direction} {content}")
     return lines
+
+
+def _source_details(msg: dict, limit: int = 700) -> str:
+    parts = []
+    for enriched in msg.get("source_enrichments") or []:
+        if enriched.get("status") != "ok":
+            continue
+        text = " ".join((enriched.get("extracted_text") or "").split())
+        if not text:
+            continue
+        label = "链接解析" if enriched.get("kind") == "link" else "图片解析"
+        parts.append(f"{label}: {text[:limit]}")
+    return "\n".join(parts)
 
 
 def _find_recent_fit(messages: list[dict], talker_name: str, is_group: bool, budget: int) -> int:

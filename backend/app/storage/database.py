@@ -6,6 +6,7 @@ from typing import Optional
 import aiosqlite
 from loguru import logger
 
+from app.knowledge.embedding import dot_score, pack_vector, unpack_vector
 from app.storage.migrations import SCHEMA_SQL
 
 
@@ -295,8 +296,8 @@ class AppDatabase:
         if limit and limit > 0:
             rows = await self._db.execute_fetchall(
                 """SELECT * FROM (
-                       SELECT m.talker, m.sender, m.type, m.type_name, m.is_sender,
-                              m.content, m.create_time, m.create_date, m.is_group,
+                       SELECT m.id, m.wechat_local_id, m.talker, m.sender, m.type, m.type_name, m.is_sender,
+                              m.content, m.display_content, m.create_time, m.create_date, m.is_group,
                               c.nickname, c.remark
                        FROM messages m
                        LEFT JOIN contacts c ON m.talker = c.username
@@ -309,8 +310,8 @@ class AppDatabase:
             return [dict(r) for r in rows]
 
         rows = await self._db.execute_fetchall(
-            """SELECT m.talker, m.sender, m.type, m.type_name, m.is_sender,
-                      m.content, m.create_time, m.create_date, m.is_group,
+            """SELECT m.id, m.wechat_local_id, m.talker, m.sender, m.type, m.type_name, m.is_sender,
+                      m.content, m.display_content, m.create_time, m.create_date, m.is_group,
                       c.nickname, c.remark
                FROM messages m
                LEFT JOIN contacts c ON m.talker = c.username
@@ -370,8 +371,8 @@ class AppDatabase:
         import time
         since_ts = int(time.time()) - hours * 3600
         rows = await self._db.execute_fetchall(
-            """SELECT m.talker, m.sender, m.type, m.type_name, m.is_sender,
-                      m.content, m.create_time, m.create_date, m.is_group,
+            """SELECT m.id, m.wechat_local_id, m.talker, m.sender, m.type, m.type_name, m.is_sender,
+                      m.content, m.display_content, m.create_time, m.create_date, m.is_group,
                       c.nickname, c.remark
                FROM messages m
                LEFT JOIN contacts c ON m.talker = c.username
@@ -381,6 +382,90 @@ class AppDatabase:
             (since_ts, limit),
         )
         return [dict(r) for r in rows]
+
+    async def attach_source_enrichments(self, messages: list[dict]) -> list[dict]:
+        if not messages:
+            return messages
+        ids = [int(item.get("id") or 0) for item in messages if int(item.get("id") or 0)]
+        if not ids:
+            return messages
+        placeholders = ",".join("?" for _ in ids)
+        rows = await self._db.execute_fetchall(
+            f"""SELECT message_id, kind, source_key, extracted_text, metadata, status, error
+                FROM message_source_enrichments
+                WHERE message_id IN ({placeholders})
+                ORDER BY id ASC""",
+            ids,
+        )
+        grouped: dict[int, list[dict]] = {}
+        for row in rows:
+            item = dict(row)
+            try:
+                item["metadata"] = json.loads(item.get("metadata") or "{}")
+            except json.JSONDecodeError:
+                item["metadata"] = {}
+            grouped.setdefault(int(item.get("message_id") or 0), []).append(item)
+        for item in messages:
+            item["source_enrichments"] = grouped.get(int(item.get("id") or 0), [])
+        return messages
+
+    async def get_source_enrichment(self, message_id: int, kind: str, source_key: str) -> dict | None:
+        rows = await self._db.execute_fetchall(
+            """SELECT * FROM message_source_enrichments
+               WHERE message_id = ? AND kind = ? AND source_key = ?
+               LIMIT 1""",
+            (message_id, kind, source_key),
+        )
+        if not rows:
+            return None
+        item = dict(rows[0])
+        try:
+            item["metadata"] = json.loads(item.get("metadata") or "{}")
+        except json.JSONDecodeError:
+            item["metadata"] = {}
+        return item
+
+    async def upsert_source_enrichment(
+        self,
+        *,
+        message_id: int,
+        kind: str,
+        source_key: str,
+        extracted_text: str,
+        metadata: dict | None = None,
+        status: str = "ok",
+        error: str = "",
+    ) -> dict:
+        await self._db.execute(
+            """INSERT INTO message_source_enrichments
+               (message_id, kind, source_key, extracted_text, metadata, status, error, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(message_id, kind, source_key) DO UPDATE SET
+                 extracted_text=excluded.extracted_text,
+                 metadata=excluded.metadata,
+                 status=excluded.status,
+                 error=excluded.error,
+                 updated_at=CURRENT_TIMESTAMP""",
+            (
+                message_id,
+                kind,
+                source_key,
+                extracted_text,
+                json.dumps(metadata or {}, ensure_ascii=False),
+                status,
+                error,
+            ),
+        )
+        await self._db.commit()
+        return {
+            "message_id": message_id,
+            "kind": kind,
+            "source_key": source_key,
+            "extracted_text": extracted_text,
+            "metadata": metadata or {},
+            "status": status,
+            "error": error,
+        }
 
     # --- Timeline ---
 
@@ -645,3 +730,242 @@ class AppDatabase:
             (event_type, payload_text),
         )
         await self._db.commit()
+
+    # --- Knowledge Base / RAG ---
+
+    async def get_message_id_bounds(self) -> dict:
+        rows = await self._db.execute_fetchall(
+            "SELECT MIN(id) AS min_id, MAX(id) AS max_id, COUNT(*) AS count FROM messages"
+        )
+        return dict(rows[0]) if rows else {"min_id": 0, "max_id": 0, "count": 0}
+
+    async def get_messages_after_id(self, after_id: int = 0, limit: int = 5000) -> list[dict]:
+        rows = await self._db.execute_fetchall(
+            """SELECT m.id, m.wechat_local_id, m.talker, m.sender, m.type, m.type_name, m.is_sender,
+                      m.content, m.display_content, m.create_time, m.create_date,
+                      m.is_group, c.nickname, c.remark, c.alias
+               FROM messages m
+               LEFT JOIN contacts c ON m.talker = c.username
+               WHERE m.id > ?
+               ORDER BY m.id ASC
+               LIMIT ?""",
+            (after_id, limit),
+        )
+        return [dict(r) for r in rows]
+
+    async def clear_knowledge_chunks(self):
+        await self._db.execute("DELETE FROM knowledge_embeddings")
+        await self._db.execute("DELETE FROM knowledge_chunks_fts")
+        await self._db.execute("DELETE FROM knowledge_chunks")
+        await self.set_setting("knowledge.last_indexed_message_id", "0", "Knowledge index high-water mark")
+        await self.set_setting("knowledge.last_embedded_chunk_id", "0", "Knowledge embedding high-water mark")
+        await self._db.commit()
+
+    async def insert_knowledge_chunks(self, chunks: list[dict]) -> int:
+        if not chunks:
+            return 0
+        inserted = 0
+        for chunk in chunks:
+            metadata = chunk.get("metadata") or {}
+            cursor = await self._db.execute(
+                """INSERT INTO knowledge_chunks
+                   (source, talker, title, text, start_message_id, end_message_id,
+                    start_time, end_time, message_count, metadata, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                (
+                    chunk.get("source", "wechat"),
+                    chunk.get("talker", ""),
+                    chunk.get("title", ""),
+                    chunk.get("text", ""),
+                    int(chunk.get("start_message_id") or 0),
+                    int(chunk.get("end_message_id") or 0),
+                    int(chunk.get("start_time") or 0),
+                    int(chunk.get("end_time") or 0),
+                    int(chunk.get("message_count") or 0),
+                    json.dumps(metadata, ensure_ascii=False),
+                ),
+            )
+            rowid = cursor.lastrowid
+            await self._db.execute(
+                "INSERT INTO knowledge_chunks_fts(rowid, title, text, talker) VALUES (?, ?, ?, ?)",
+                (rowid, chunk.get("title", ""), chunk.get("text", ""), chunk.get("talker", "")),
+            )
+            inserted += 1
+        await self._db.commit()
+        return inserted
+
+    async def get_knowledge_status(self) -> dict:
+        chunk_rows = await self._db.execute_fetchall("SELECT COUNT(*) AS count FROM knowledge_chunks")
+        embedding_rows = await self._db.execute_fetchall(
+            """SELECT COUNT(*) AS count,
+                      COUNT(DISTINCT chunk_id) AS embedded_chunks,
+                      MAX(chunk_id) AS max_embedded_chunk_id
+               FROM knowledge_embeddings"""
+        )
+        bounds = await self.get_message_id_bounds()
+        last_indexed = await self.get_setting("knowledge.last_indexed_message_id", "0")
+        last_embedded = await self.get_setting("knowledge.last_embedded_chunk_id", "0")
+        latest_chunk = await self._db.execute_fetchall(
+            """SELECT id, title, end_message_id, end_time, updated_at
+               FROM knowledge_chunks
+               ORDER BY id DESC
+               LIMIT 1"""
+        )
+        chunk_count = int(chunk_rows[0]["count"] or 0) if chunk_rows else 0
+        embedded_count = int(embedding_rows[0]["embedded_chunks"] or 0) if embedding_rows else 0
+        return {
+            "chunks": chunk_count,
+            "embedded_chunks": embedded_count,
+            "embedding_rows": int(embedding_rows[0]["count"] or 0) if embedding_rows else 0,
+            "last_embedded_chunk_id": int(last_embedded or 0),
+            "embeddings_caught_up": chunk_count > 0 and embedded_count >= chunk_count,
+            "messages": int(bounds.get("count") or 0),
+            "min_message_id": int(bounds.get("min_id") or 0),
+            "max_message_id": int(bounds.get("max_id") or 0),
+            "last_indexed_message_id": int(last_indexed or 0),
+            "caught_up": int(last_indexed or 0) >= int(bounds.get("max_id") or 0),
+            "latest_chunk": dict(latest_chunk[0]) if latest_chunk else None,
+        }
+
+    async def get_chunks_without_embedding(self, model: str, limit: int = 100) -> list[dict]:
+        rows = await self._db.execute_fetchall(
+            """SELECT k.id, k.title, k.text, k.talker, k.end_time
+               FROM knowledge_chunks k
+               LEFT JOIN knowledge_embeddings e
+                 ON e.chunk_id = k.id AND e.model = ?
+               WHERE e.chunk_id IS NULL
+               ORDER BY k.id ASC
+               LIMIT ?""",
+            (model, min(max(limit, 1), 1000)),
+        )
+        return [dict(r) for r in rows]
+
+    async def insert_knowledge_embeddings(self, model: str, records: list[dict]) -> int:
+        if not records:
+            return 0
+        rows = []
+        max_chunk_id = 0
+        for item in records:
+            vector = item.get("vector") or []
+            chunk_id = int(item.get("chunk_id") or 0)
+            if not chunk_id or not vector:
+                continue
+            max_chunk_id = max(max_chunk_id, chunk_id)
+            rows.append((chunk_id, model, len(vector), pack_vector(vector)))
+        if not rows:
+            return 0
+        await self._db.executemany(
+            """INSERT OR REPLACE INTO knowledge_embeddings
+               (chunk_id, model, dimensions, vector, created_at)
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+            rows,
+        )
+        await self.set_setting("knowledge.last_embedded_chunk_id", str(max_chunk_id), "Knowledge embedding high-water mark")
+        await self._db.commit()
+        return len(rows)
+
+    async def search_knowledge_vector(
+        self,
+        query_vector: list[float],
+        model: str,
+        limit: int = 8,
+        talker: str = "",
+    ) -> list[dict]:
+        if not query_vector:
+            return []
+        limit = min(max(limit, 1), 30)
+        talker_clause = ""
+        params: list = [model, len(query_vector)]
+        if talker:
+            talker_clause = "AND k.talker = ?"
+            params.append(talker)
+        rows = await self._db.execute_fetchall(
+            f"""SELECT k.*, e.vector
+                FROM knowledge_embeddings e
+                JOIN knowledge_chunks k ON k.id = e.chunk_id
+                WHERE e.model = ? AND e.dimensions = ? {talker_clause}""",
+            params,
+        )
+        scored = []
+        for row in rows:
+            item = dict(row)
+            vector = unpack_vector(item.pop("vector"))
+            item["score"] = dot_score(query_vector, vector)
+            item["retrieval"] = "embedding"
+            try:
+                item["metadata"] = json.loads(item.get("metadata") or "{}")
+            except json.JSONDecodeError:
+                item["metadata"] = {}
+            scored.append(item)
+        scored.sort(key=lambda item: (float(item.get("score") or 0), int(item.get("end_time") or 0)), reverse=True)
+        return scored[:limit]
+
+    def _fts_query(self, query: str) -> str:
+        import re
+
+        terms = re.findall(r"[\w\u4e00-\u9fff]+", query)
+        if not terms:
+            return '""'
+        return " OR ".join(f'"{term[:64].replace(chr(34), chr(34) + chr(34))}"' for term in terms[:8])
+
+    def _search_terms(self, query: str) -> list[str]:
+        import re
+
+        normalized = query
+        for phrase in ("聊了什么", "聊什么", "都聊了啥", "都聊什么", "最近", "大家", "关于", "有关"):
+            normalized = normalized.replace(phrase, " ")
+        normalized = re.sub(r"[和与及、，,。？?：:；;]+", " ", normalized)
+        terms = re.findall(r"[\w\u4e00-\u9fff]+", normalized)
+        stopwords = {"最近", "大家", "关于", "什么", "都", "聊了什么", "聊", "的", "和"}
+        return [term for term in terms if term not in stopwords and len(term) >= 2][:8]
+
+    async def search_knowledge(self, query: str, limit: int = 8, talker: str = "") -> list[dict]:
+        clean = query.strip()
+        if not clean:
+            return []
+        limit = min(max(limit, 1), 30)
+        params: list = [self._fts_query(clean)]
+        talker_clause = ""
+        if talker:
+            talker_clause = "AND k.talker = ?"
+            params.append(talker)
+        try:
+            rows = await self._db.execute_fetchall(
+                f"""SELECT k.*, bm25(knowledge_chunks_fts) AS score
+                    FROM knowledge_chunks_fts
+                    JOIN knowledge_chunks k ON k.id = knowledge_chunks_fts.rowid
+                    WHERE knowledge_chunks_fts MATCH ? {talker_clause}
+                    ORDER BY score ASC, k.end_time DESC
+                    LIMIT ?""",
+                params + [limit],
+            )
+        except Exception:
+            rows = []
+        if not rows:
+            terms = self._search_terms(clean) or [clean]
+            like_clauses = []
+            like_params: list = []
+            for term in terms:
+                like_clauses.append("(title LIKE ? OR text LIKE ?)")
+                like_params.extend([f"%{term}%", f"%{term}%"])
+            talker_like_clause = ""
+            if talker:
+                talker_like_clause = "AND talker = ?"
+                like_params.append(talker)
+            rows = await self._db.execute_fetchall(
+                f"""SELECT *, 0 AS score
+                    FROM knowledge_chunks
+                    WHERE ({' OR '.join(like_clauses)}) {talker_like_clause}
+                    ORDER BY end_time DESC
+                    LIMIT ?""",
+                like_params + [limit],
+            )
+        results = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["metadata"] = json.loads(item.get("metadata") or "{}")
+            except json.JSONDecodeError:
+                item["metadata"] = {}
+            results.append(item)
+        return results

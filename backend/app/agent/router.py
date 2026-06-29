@@ -61,11 +61,15 @@ class AgentRouter:
         if forced:
             return forced
 
+        local_first = self._heuristic_route(text)
+        if local_first and local_first.confidence >= 0.9:
+            return local_first
+
         smart_router_enabled = await self._smart_router_enabled()
         if smart_router_enabled and self._openai_compatible_configured():
             try:
                 decision = await asyncio.to_thread(self._openai_route_with_retry, text)
-                if decision:
+                if decision and (decision.route != ROUTE_GENERAL or decision.confidence >= 0.75):
                     return decision
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"OpenAI-compatible agent router failed, using Claude/local fallback: {exc}")
@@ -73,14 +77,13 @@ class AgentRouter:
         if smart_router_enabled and self.settings.ANTHROPIC_API_KEY and self.settings.ANTHROPIC_BASE_URL:
             try:
                 decision = await asyncio.to_thread(self._claude_route_with_retry, text)
-                if decision:
+                if decision and (decision.route != ROUTE_GENERAL or decision.confidence >= 0.75):
                     return decision
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"Smart agent router failed, using local route fallback: {exc}")
 
-        heuristic = self._heuristic_route(text)
-        if heuristic:
-            return heuristic
+        if local_first:
+            return local_first
         return AgentRouteDecision(ROUTE_GENERAL, 0.55, "no strong local signal", "local")
 
     async def _smart_router_enabled(self) -> bool:
@@ -186,11 +189,24 @@ class AgentRouter:
             "联系人",
             "群聊",
         )
-        summary_terms = ("总结", "汇总", "分析", "整理", "复盘", "重点", "摘要", "查一下", "搜索")
+        summary_terms = ("总结", "汇总", "分析", "整理", "复盘", "重点", "摘要", "查一下", "搜索", "综合一下")
+        natural_record_context_terms = ("最近", "今天", "昨天", "这周", "本周", "这几天", "大家", "群里", "微信", "有没有", "是否", "谁", "哪些", "哪里")
+        natural_record_action_terms = ("聊", "讨论", "提到", "说到", "吐槽", "评价", "综合", "总结", "看法", "观点", "怎么看", "态度", "反应")
+        natural_record_patterns = (
+            r"(最近|今天|昨天|这周|本周|这几天|大家|群里|微信).{0,20}(聊|讨论|提到|说到|吐槽|评价)",
+            r"(有没有|是否|谁|哪些|哪里).{0,20}(聊|讨论|提到|说到|吐槽|评价)",
+            r"(关于|有关).{1,40}(聊|讨论|提到|说到|吐槽|评价|总结|综合)",
+        )
         if any(term in compact for term in record_terms):
             return AgentRouteDecision(ROUTE_RECORDS, 0.94, "wechat record wording", "local")
         if any(term in compact for term in summary_terms) and any(term in compact for term in ("微信", "聊天", "记录", "会话")):
             return AgentRouteDecision(ROUTE_RECORDS, 0.9, "summary/search over chat wording", "local")
+        if any(term in compact for term in natural_record_context_terms) and any(term in compact for term in natural_record_action_terms):
+            return AgentRouteDecision(ROUTE_RECORDS, 0.92, "natural chat-record question", "local")
+        if any(term in compact for term in ("最近大家对", "群里对", "微信里对", "大家对")) and any(term in compact for term in ("看法", "观点", "怎么看", "态度", "反应")):
+            return AgentRouteDecision(ROUTE_RECORDS, 0.93, "group opinion over chat records", "local")
+        if any(re.search(pattern, text) for pattern in natural_record_patterns):
+            return AgentRouteDecision(ROUTE_RECORDS, 0.92, "natural chat-record question", "local")
 
         if compact.endswith("?") or compact.endswith("？") or len(compact) < 80:
             return AgentRouteDecision(ROUTE_GENERAL, 0.72, "ordinary short/general message", "local")

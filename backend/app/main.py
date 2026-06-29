@@ -14,6 +14,7 @@ from app.api.router import api_router
 from app.api.ws import ws_manager
 from app.scheduler.daily_summary import daily_summary_scheduler
 from app.sync.engine import sync_engine
+from app.knowledge.indexer import knowledge_indexer
 
 
 @asynccontextmanager
@@ -34,14 +35,17 @@ async def lifespan(app: FastAPI):
     # Start sync engine in background
     sync_task = asyncio.create_task(sync_engine.start())
     daily_summary_task = asyncio.create_task(daily_summary_scheduler.start())
+    knowledge_task = asyncio.create_task(knowledge_indexer.start())
 
     yield
 
     # Shutdown
     sync_engine.stop()
     daily_summary_scheduler.stop()
+    knowledge_indexer.stop()
     sync_task.cancel()
     daily_summary_task.cancel()
+    knowledge_task.cancel()
     await close_db()
     logger.info("WeChatAI stopped.")
 

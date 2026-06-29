@@ -9,7 +9,7 @@ from loguru import logger
 
 from app.agent.claude_agent import ClaudeDirectAgent, ClaudeWechatAgent
 from app.agent.dev_agent import DEV_AGENT_VERSION, DevAgent, execute_dev_action_payload
-from app.agent.router import AgentRouter, ROUTE_DEVELOPMENT, ROUTE_GENERAL
+from app.agent.router import AgentRouteDecision, AgentRouter, ROUTE_DEVELOPMENT, ROUTE_GENERAL, ROUTE_RECORDS
 from app.agent.tools import AgentTools
 from app.config.settings import get_settings
 from app.dependencies import get_db
@@ -22,6 +22,8 @@ class WechatAgentService:
     ENTRY_NAME_KEY = "agent.entry_name"
     ENABLED_KEY = "agent.enabled"
     LAST_ID_KEY = "agent.last_message_id"
+    DIALOG_SESSION_KEY = "agent.dialog_session_id"
+    LAST_ROUTE_KEY = "agent.last_route"
 
     def __init__(self):
         self.settings = get_settings()
@@ -167,6 +169,7 @@ class WechatAgentService:
     async def handle_entry_text(self, text: str) -> dict:
         db = await get_db()
         stripped_text = text.strip()
+        dialog_history = await self._get_dialog_history(db)
         if stripped_text.startswith("确认 "):
             return await self.confirm_action(stripped_text.split(None, 1)[1].strip())
         confirm = re.match(r"^\s*确认\s+([a-zA-Z0-9_-]{4,})\s*$", text)
@@ -185,10 +188,12 @@ class WechatAgentService:
         if health_result:
             return health_result
 
-        route = await AgentRouter().decide(text)
+        route = await self._decide_route_with_dialog_memory(db, text)
         if route.route == ROUTE_DEVELOPMENT:
             agent = DevAgent(db)
             reply = await agent.reply(text)
+            await db.set_setting(self.LAST_ROUTE_KEY, route.route, "Last WeChat agent route")
+            await self._save_dialog_turn(db, text, reply.text)
             await db.add_agent_audit(
                 "dev_agent_reply",
                 {
@@ -209,7 +214,9 @@ class WechatAgentService:
 
         if route.route == ROUTE_GENERAL:
             agent = ClaudeDirectAgent()
-            reply = await agent.reply(text)
+            reply = await agent.reply(text, dialog_history=dialog_history)
+            await db.set_setting(self.LAST_ROUTE_KEY, route.route, "Last WeChat agent route")
+            await self._save_dialog_turn(db, text, reply.text)
             await db.add_agent_audit(
                 "direct_agent_reply",
                 {"input": text, "route": route.to_dict(), "reply": reply.text, "used_claude": reply.used_claude},
@@ -222,7 +229,9 @@ class WechatAgentService:
             }
 
         agent = ClaudeWechatAgent(AgentTools(db))
-        reply = await agent.reply(text)
+        reply = await agent.reply(text, dialog_history=dialog_history)
+        await db.set_setting(self.LAST_ROUTE_KEY, route.route, "Last WeChat agent route")
+        await self._save_dialog_turn(db, text, reply.text)
         await db.add_agent_audit(
             "agent_reply",
             {"input": text, "route": route.to_dict(), "reply": reply.text, "used_claude": reply.used_claude},
@@ -234,6 +243,36 @@ class WechatAgentService:
             "agent_route": route.to_dict(),
             "pending_action": reply.pending_action,
         }
+
+    async def _decide_route_with_dialog_memory(self, db, text: str) -> AgentRouteDecision:
+        last_route = await db.get_setting(self.LAST_ROUTE_KEY, "")
+        if last_route == ROUTE_RECORDS and self._is_followup_text(text):
+            return AgentRouteDecision(ROUTE_RECORDS, 0.91, "follow-up to previous records answer", "local")
+        return await AgentRouter().decide(text)
+
+    def _is_followup_text(self, text: str) -> bool:
+        compact = re.sub(r"\s+", "", text.lower())
+        if compact in {"继续", "详细点", "展开", "说细点", "这个呢", "那这个呢", "还有呢", "然后呢", "再说说"}:
+            return True
+        return any(term in compact for term in ("详细", "按群", "按联系人", "分开说", "继续说", "展开说", "具体点", "多说点"))
+
+    async def _get_dialog_history(self, db, limit: int = 10) -> list[dict]:
+        session_id = await db.get_setting(self.DIALOG_SESSION_KEY, "")
+        if not session_id:
+            return []
+        messages = await db.get_ai_messages(session_id)
+        return [
+            {"role": item.get("role", ""), "content": item.get("content", ""), "created_at": item.get("created_at", "")}
+            for item in messages[-limit:]
+        ]
+
+    async def _save_dialog_turn(self, db, user_text: str, assistant_text: str):
+        session_id = await db.get_setting(self.DIALOG_SESSION_KEY, "")
+        if not session_id:
+            session_id = await db.create_ai_session(talker="wechat_agent_dialog", title="WeChat Agent Dialog")
+            await db.set_setting(self.DIALOG_SESSION_KEY, session_id, "Short-term dialog memory for WeChat agent")
+        await db.save_ai_message(session_id, "user", user_text)
+        await db.save_ai_message(session_id, "assistant", assistant_text)
 
     async def _handle_agent_health_question(self, text: str) -> dict | None:
         compact = re.sub(r"\s+", "", text.lower())
