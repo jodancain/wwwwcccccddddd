@@ -166,10 +166,11 @@ class WechatAgentService:
             "message": "没有找到匹配会话" if not matches else "找到多个匹配会话，请指定 entry_talker",
         }
 
-    async def handle_entry_text(self, text: str) -> dict:
+    async def handle_entry_text(self, text: str, dialog_key: str | None = None) -> dict:
         db = await get_db()
         stripped_text = text.strip()
-        dialog_history = await self._get_dialog_history(db)
+        dialog_key = dialog_key or self.DIALOG_SESSION_KEY
+        dialog_history = await self._get_dialog_history(db, dialog_key=dialog_key)
         if stripped_text.startswith("确认 "):
             return await self.confirm_action(stripped_text.split(None, 1)[1].strip())
         confirm = re.match(r"^\s*确认\s+([a-zA-Z0-9_-]{4,})\s*$", text)
@@ -193,7 +194,7 @@ class WechatAgentService:
             agent = DevAgent(db)
             reply = await agent.reply(text)
             await db.set_setting(self.LAST_ROUTE_KEY, route.route, "Last WeChat agent route")
-            await self._save_dialog_turn(db, text, reply.text)
+            await self._save_dialog_turn(db, text, reply.text, dialog_key=dialog_key)
             await db.add_agent_audit(
                 "dev_agent_reply",
                 {
@@ -216,7 +217,7 @@ class WechatAgentService:
             agent = ClaudeDirectAgent()
             reply = await agent.reply(text, dialog_history=dialog_history)
             await db.set_setting(self.LAST_ROUTE_KEY, route.route, "Last WeChat agent route")
-            await self._save_dialog_turn(db, text, reply.text)
+            await self._save_dialog_turn(db, text, reply.text, dialog_key=dialog_key)
             await db.add_agent_audit(
                 "direct_agent_reply",
                 {"input": text, "route": route.to_dict(), "reply": reply.text, "used_claude": reply.used_claude},
@@ -231,7 +232,7 @@ class WechatAgentService:
         agent = ClaudeWechatAgent(AgentTools(db))
         reply = await agent.reply(text, dialog_history=dialog_history)
         await db.set_setting(self.LAST_ROUTE_KEY, route.route, "Last WeChat agent route")
-        await self._save_dialog_turn(db, text, reply.text)
+        await self._save_dialog_turn(db, text, reply.text, dialog_key=dialog_key)
         await db.add_agent_audit(
             "agent_reply",
             {"input": text, "route": route.to_dict(), "reply": reply.text, "used_claude": reply.used_claude},
@@ -254,10 +255,21 @@ class WechatAgentService:
         compact = re.sub(r"\s+", "", text.lower())
         if compact in {"继续", "详细点", "展开", "说细点", "这个呢", "那这个呢", "还有呢", "然后呢", "再说说"}:
             return True
+        if re.fullmatch(r"(跟|和|与|关于|有关).{1,30}(相关|相关的|有关|有关的)", compact):
+            return True
+        if re.fullmatch(r".{1,30}(相关|相关的|有关|有关的)", compact):
+            return True
+        topic_terms = (
+            "美股", "股票", "股市", "a股", "港股", "奈飞", "netflix", "nflx",
+            "投资", "交易", "币", "btc", "eth", "大饼", "标的", "机会", "风险",
+            "汽车", "车", "求职", "项目",
+        )
+        if any(term in compact for term in topic_terms) and any(term in compact for term in ("相关", "有关", "提到", "聊", "说", "讨论")):
+            return True
         return any(term in compact for term in ("详细", "按群", "按联系人", "分开说", "继续说", "展开说", "具体点", "多说点"))
 
-    async def _get_dialog_history(self, db, limit: int = 10) -> list[dict]:
-        session_id = await db.get_setting(self.DIALOG_SESSION_KEY, "")
+    async def _get_dialog_history(self, db, limit: int = 10, dialog_key: str | None = None) -> list[dict]:
+        session_id = await db.get_setting(dialog_key or self.DIALOG_SESSION_KEY, "")
         if not session_id:
             return []
         messages = await db.get_ai_messages(session_id)
@@ -266,11 +278,14 @@ class WechatAgentService:
             for item in messages[-limit:]
         ]
 
-    async def _save_dialog_turn(self, db, user_text: str, assistant_text: str):
-        session_id = await db.get_setting(self.DIALOG_SESSION_KEY, "")
+    async def _save_dialog_turn(self, db, user_text: str, assistant_text: str, dialog_key: str | None = None):
+        key = dialog_key or self.DIALOG_SESSION_KEY
+        session_id = await db.get_setting(key, "")
         if not session_id:
-            session_id = await db.create_ai_session(talker="wechat_agent_dialog", title="WeChat Agent Dialog")
-            await db.set_setting(self.DIALOG_SESSION_KEY, session_id, "Short-term dialog memory for WeChat agent")
+            talker = "wechat_agent_dialog" if key == self.DIALOG_SESSION_KEY else key
+            title = "WeChat Agent Dialog" if key == self.DIALOG_SESSION_KEY else "Open Agent Dialog"
+            session_id = await db.create_ai_session(talker=talker, title=title)
+            await db.set_setting(key, session_id, "Short-term dialog memory for agent")
         await db.save_ai_message(session_id, "user", user_text)
         await db.save_ai_message(session_id, "assistant", assistant_text)
 

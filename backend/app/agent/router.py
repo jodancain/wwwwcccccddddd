@@ -192,6 +192,11 @@ class AgentRouter:
         summary_terms = ("总结", "汇总", "分析", "整理", "复盘", "重点", "摘要", "查一下", "搜索", "综合一下")
         natural_record_context_terms = ("最近", "今天", "昨天", "这周", "本周", "这几天", "大家", "群里", "微信", "有没有", "是否", "谁", "哪些", "哪里")
         natural_record_action_terms = ("聊", "讨论", "提到", "说到", "吐槽", "评价", "综合", "总结", "看法", "观点", "怎么看", "态度", "反应")
+        topic_record_terms = (
+            "美股", "股票", "股市", "a股", "港股", "奈飞", "netflix", "nflx",
+            "投资", "交易", "币", "btc", "eth", "大饼", "标的", "机会", "风险",
+            "汽车", "腾势", "小米", "问界", "求职", "项目",
+        )
         natural_record_patterns = (
             r"(最近|今天|昨天|这周|本周|这几天|大家|群里|微信).{0,20}(聊|讨论|提到|说到|吐槽|评价)",
             r"(有没有|是否|谁|哪些|哪里).{0,20}(聊|讨论|提到|说到|吐槽|评价)",
@@ -203,6 +208,10 @@ class AgentRouter:
             return AgentRouteDecision(ROUTE_RECORDS, 0.9, "summary/search over chat wording", "local")
         if any(term in compact for term in natural_record_context_terms) and any(term in compact for term in natural_record_action_terms):
             return AgentRouteDecision(ROUTE_RECORDS, 0.92, "natural chat-record question", "local")
+        if any(term in compact for term in topic_record_terms) and any(term in compact for term in ("相关", "有关", "提到", "聊", "讨论", "说到")):
+            return AgentRouteDecision(ROUTE_RECORDS, 0.91, "topic-related chat-record lookup", "local")
+        if re.fullmatch(r"(跟|和|与|关于|有关).{1,30}(相关|相关的|有关|有关的)", compact):
+            return AgentRouteDecision(ROUTE_RECORDS, 0.9, "topic-related follow-up lookup", "local")
         if any(term in compact for term in ("最近大家对", "群里对", "微信里对", "大家对")) and any(term in compact for term in ("看法", "观点", "怎么看", "态度", "反应")):
             return AgentRouteDecision(ROUTE_RECORDS, 0.93, "group opinion over chat records", "local")
         if any(re.search(pattern, text) for pattern in natural_record_patterns):

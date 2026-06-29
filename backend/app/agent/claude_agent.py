@@ -383,7 +383,30 @@ class ClaudeWechatAgent:
         for part in parts[:6]:
             if part not in candidates:
                 candidates.append(part)
+        self._append_domain_query_expansions(message, candidates)
         return candidates[:8]
+
+    def _append_domain_query_expansions(self, message: str, candidates: list[str]) -> None:
+        compact = re.sub(r"\s+", "", message.lower())
+        expansions: list[str] = []
+        if any(term in compact for term in ("美股", "奈飞", "netflix", "nflx", "股票", "股市", "投资")):
+            expansions.extend([
+                "美股",
+                "奈飞",
+                "Netflix",
+                "NFLX",
+                "股票",
+                "股市",
+                "投资",
+                "小声搞钱",
+            ])
+        if any(term in compact for term in ("币", "btc", "eth", "大饼", "以太")):
+            expansions.extend(["BTC", "ETH", "大饼", "以太", "币圈", "合约"])
+        if any(term in compact for term in ("汽车", "车", "腾势", "小米", "问界", "m9", "su7")):
+            expansions.extend(["汽车", "腾势", "小米汽车", "问界", "M9", "SU7"])
+        for item in expansions:
+            if item and item not in candidates:
+                candidates.append(item)
 
     async def _search_knowledge_candidates(self, candidates: list[str], talker: str = "", limit: int = 24) -> list[dict]:
         merged: dict[int, dict] = {}
@@ -523,11 +546,18 @@ class ClaudeWechatAgent:
         return None
 
     def _context_prompt(self, message: str, context: dict[str, Any]) -> str:
+        wants_json = bool(re.search(r"\bjson\b|结构化|schema|字段", message, flags=re.IGNORECASE))
+        output_instruction = (
+            "输出格式硬性要求：用户原文没有明确要求 JSON/json/结构化/schema 时，必须用自然中文段落和项目符号回答，禁止输出 JSON，禁止输出代码块。"
+            if not wants_json
+            else "输出格式硬性要求：用户明确要求 JSON/结构化输出时，只输出合法 JSON，不要 Markdown，不要解释性前后缀。"
+        )
         return (
             f"{SYSTEM_PROMPT}\n\n"
             f"用户问题：{message}\n\n"
             f"本次检索范围：{context.get('scope')}\n"
-            f"可用本地检索结果 JSON：\n{json.dumps(context, ensure_ascii=False, indent=2)}\n\n"
+            f"可用本地检索结果 JSON（注意：这是输入证据格式，不是输出格式）：\n{json.dumps(context, ensure_ascii=False, indent=2)}\n\n"
+            f"{output_instruction}"
             "请像一个聪明的微信聊天记录分析 agent 一样回答：先判断用户真实意图，再综合证据，不要机械复述检索片段。"
             "knowledge_hits 是长期知识库/RAG 检索命中的聊天块；只要 knowledge_hits 非空，就代表已经找到相关聊天内容，"
             "必须基于这些知识块回答，不能说没有找到。可以按 title/name 引用来源。"
@@ -535,8 +565,8 @@ class ClaudeWechatAgent:
             "query_candidates 是系统根据用户自然语言自动改写出来的检索词，matched_query 表示该片段由哪个查询命中。"
             "回答时优先使用 message_count 多、时间新、与用户问题最贴近的片段；如果命中分散，要合并成主题，而不是逐条罗列。"
             "默认必须详细回答，不要只给短摘要。格式建议：先给一句话结论；然后给 8-15 个细分要点，每个要点带来源群/联系人、日期、原话/证据、你的判断；最后给待办、风险、后续可追问。"
-            "如果用户或上游系统要求 JSON，也必须输出详细 JSON：字段里要包含 detailed_summary、topic_breakdown、evidence_items、risks、open_questions、next_actions；signals 不能只有一条，除非证据确实只有一条。"
-            "只要用户问题里出现 JSON/json/结构化输出/API schema，就必须只输出合法 JSON，不要 Markdown，不要解释性前后缀。"
+            "如果用户原文明确要求 JSON，也必须输出详细 JSON：字段里要包含 detailed_summary、topic_breakdown、evidence_items、risks、open_questions、next_actions；signals 不能只有一条，除非证据确实只有一条。"
+            "只有用户问题原文出现 JSON/json/结构化输出/API schema/字段 时才输出 JSON；否则即使检索证据是 JSON，也必须输出自然中文。"
             "投资/交易类问题要把 market_notes、signals、rationale、evidence、risk 写具体：每个标的至少说明消息来源、讨论背景、支持理由、反对/不确定因素、需要继续观察的触发条件。"
             "如果用户问“最近/大家/有没有聊”，默认是在问所有微信聊天记录，不要只看 WeixinClawBot 入口这一个会话。"
             "如果 scope 是 all_conversations_all_history，请理解为用户要看所有会话的全部已同步聊天记录，"

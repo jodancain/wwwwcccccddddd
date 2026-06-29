@@ -672,7 +672,10 @@ async def open_agent_chat(
 
     await db.save_ai_message(session_id, "user", req.message)
     agent_message = req.message + _open_agent_detail_instruction(req)
-    result = await wechat_agent_service.handle_entry_text(agent_message)
+    result = await wechat_agent_service.handle_entry_text(
+        agent_message,
+        dialog_key=f"open_agent.dialog_session_id.{api_record['id']}",
+    )
     reply = str(result.get("reply") or "")
     await db.save_ai_message(session_id, "assistant", reply)
     await db.add_agent_audit(
