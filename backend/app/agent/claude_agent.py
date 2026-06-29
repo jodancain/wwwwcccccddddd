@@ -175,7 +175,7 @@ class ClaudeDirectAgent:
         body = json.dumps(
             {
                 "model": self.settings.CLAUDE_MODEL,
-                "max_tokens": 1200,
+                "max_tokens": 4000,
                 "system": DIRECT_SYSTEM_PROMPT,
                 "messages": [{"role": "user", "content": self._direct_prompt(message, dialog_history)}],
             },
@@ -308,7 +308,7 @@ class ClaudeWechatAgent:
                 hours = 168
                 recent = await self.tools.global_recent_messages(hours=hours, limit=220)
             overview = await self.tools.global_message_overview()
-            knowledge_hits = await self._search_knowledge_candidates(query_candidates, limit=12)
+            knowledge_hits = await self._search_knowledge_candidates(query_candidates, limit=24)
             return {
                 "scope": "all_conversations_all_history" if hours <= 0 else "all_conversations_recent",
                 "query": query,
@@ -328,7 +328,7 @@ class ClaudeWechatAgent:
         talker = self._select_talker(query, conversations)
         search_hits = await self.tools.search_messages(query or expanded_message, talker=talker, limit=50)
         recent = await self.tools.recent_messages(talker, limit=100) if talker else []
-        knowledge_hits = await self._search_knowledge_candidates(query_candidates, talker=talker, limit=12)
+        knowledge_hits = await self._search_knowledge_candidates(query_candidates, talker=talker, limit=24)
         return {
             "scope": "selected_conversation" if talker else "search",
             "query": query,
@@ -385,7 +385,7 @@ class ClaudeWechatAgent:
                 candidates.append(part)
         return candidates[:8]
 
-    async def _search_knowledge_candidates(self, candidates: list[str], talker: str = "", limit: int = 12) -> list[dict]:
+    async def _search_knowledge_candidates(self, candidates: list[str], talker: str = "", limit: int = 24) -> list[dict]:
         merged: dict[int, dict] = {}
         for candidate in candidates:
             if not candidate.strip():
@@ -534,7 +534,10 @@ class ClaudeWechatAgent:
             "search_hits 为空不等于没找到，因为长期知识库可能已经命中。"
             "query_candidates 是系统根据用户自然语言自动改写出来的检索词，matched_query 表示该片段由哪个查询命中。"
             "回答时优先使用 message_count 多、时间新、与用户问题最贴近的片段；如果命中分散，要合并成主题，而不是逐条罗列。"
-            "格式建议：一句话结论；然后 3-6 个要点，每个要点带来源群/联系人和日期；最后只在确实需要时提出下一步可追问。"
+            "默认必须详细回答，不要只给短摘要。格式建议：先给一句话结论；然后给 8-15 个细分要点，每个要点带来源群/联系人、日期、原话/证据、你的判断；最后给待办、风险、后续可追问。"
+            "如果用户或上游系统要求 JSON，也必须输出详细 JSON：字段里要包含 detailed_summary、topic_breakdown、evidence_items、risks、open_questions、next_actions；signals 不能只有一条，除非证据确实只有一条。"
+            "只要用户问题里出现 JSON/json/结构化输出/API schema，就必须只输出合法 JSON，不要 Markdown，不要解释性前后缀。"
+            "投资/交易类问题要把 market_notes、signals、rationale、evidence、risk 写具体：每个标的至少说明消息来源、讨论背景、支持理由、反对/不确定因素、需要继续观察的触发条件。"
             "如果用户问“最近/大家/有没有聊”，默认是在问所有微信聊天记录，不要只看 WeixinClawBot 入口这一个会话。"
             "如果 scope 是 all_conversations_all_history，请理解为用户要看所有会话的全部已同步聊天记录，"
             "overview 覆盖全量统计，recent_messages 是为控制上下文而抽取的最新代表消息。"
@@ -578,7 +581,7 @@ class ClaudeWechatAgent:
         body = json.dumps(
             {
                 "model": self.settings.CLAUDE_MODEL,
-                "max_tokens": 1600,
+                "max_tokens": 5000,
                 "messages": [{"role": "user", "content": self._context_prompt(message, context)}],
             },
             ensure_ascii=False,
@@ -647,8 +650,8 @@ class ClaudeWechatAgent:
         if not conversations and not hits:
             if knowledge_hits:
                 lines = [f"我先从知识库里找到这些相关片段（问题：{message}）："]
-                for item in knowledge_hits[:6]:
-                    snippet = (item.get("text") or "").replace("\n", " ")[:180]
+                for item in knowledge_hits[:12]:
+                    snippet = (item.get("text") or "").replace("\n", " ")[:420]
                     lines.append(f"- {item.get('title') or item.get('name')}：{snippet}")
                 return "\n".join(lines)
             return "我还没在已同步聊天记录或知识库里找到相关内容。可以先确认微信已经同步，或把联系人/群名说得更精确一点。"

@@ -34,6 +34,7 @@ class OpenAgentChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     session_id: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
+    detail_level: str = "comprehensive"
 
 
 class OpenKnowledgeSearchRequest(BaseModel):
@@ -99,6 +100,39 @@ def _is_confirm_or_cancel_text(message: str) -> bool:
     if stripped.startswith(("confirm ", "cancel ")):
         return True
     return bool(stripped.startswith(("确认", "取消")))
+
+
+def _open_agent_detail_instruction(req: OpenAgentChatRequest) -> str:
+    raw_level = req.detail_level or req.metadata.get("detail_level") or "comprehensive"
+    level = str(raw_level).strip().lower()
+    if level in {"short", "brief", "concise", "simple"}:
+        return ""
+    schema_hint = req.metadata.get("response_schema") or req.metadata.get("schema") or ""
+    domain_hint = req.metadata.get("domain") or ""
+    wants_json = "json" in req.message.lower() or bool(schema_hint)
+    strict_json = ""
+    if wants_json:
+        strict_json = (
+            "STRICT OUTPUT FORMAT: Return ONLY valid JSON. Do not wrap it in Markdown. "
+            "Do not add prose before or after the JSON. Expand the JSON schema with detailed nested fields when needed.\n"
+        )
+    return (
+        "\n\n[Open API response policy]\n"
+        f"{strict_json}"
+        "Default to a comprehensive, evidence-first answer. Do not return a thin summary.\n"
+        "Use the full WeChatAI project context and knowledge base whenever relevant.\n"
+        "If the caller asks for JSON, keep valid JSON but make every field detailed: include detailed_summary, "
+        "topic_breakdown, evidence_items with source chat/contact/date/snippet, risks, uncertainties, next_actions, "
+        "and open_questions when applicable.\n"
+        "For investment/trading outputs, do not produce only one generic signal unless only one item is truly supported. "
+        "For each signal include symbol, side, conviction, rationale, evidence, counter_evidence_or_uncertainty, risk, "
+        "what_to_watch_next, and source_messages. Summaries should explain who discussed it, what exactly was said, "
+        "why it matters, and what is not yet confirmed.\n"
+        "If evidence is sparse, say so explicitly and still provide the supporting snippets and missing information.\n"
+        f"Requested detail_level: {level or 'comprehensive'}.\n"
+        f"Optional domain hint: {domain_hint}.\n"
+        f"Optional response schema hint: {schema_hint}.\n"
+    )
 
 
 @mgmt_router.get("/")
@@ -637,7 +671,8 @@ async def open_agent_chat(
         session_id = await db.create_ai_session(talker=owner_talker, title=f"Open Agent API - {api_record.get('name') or api_record['id']}")
 
     await db.save_ai_message(session_id, "user", req.message)
-    result = await wechat_agent_service.handle_entry_text(req.message)
+    agent_message = req.message + _open_agent_detail_instruction(req)
+    result = await wechat_agent_service.handle_entry_text(agent_message)
     reply = str(result.get("reply") or "")
     await db.save_ai_message(session_id, "assistant", reply)
     await db.add_agent_audit(
@@ -648,6 +683,7 @@ async def open_agent_chat(
             "status": result.get("status"),
             "route": result.get("agent_route"),
             "metadata": req.metadata,
+            "detail_level": req.detail_level,
         },
     )
     return {
@@ -656,6 +692,7 @@ async def open_agent_chat(
         "reply": reply,
         "used_claude": bool(result.get("used_claude")),
         "agent_route": result.get("agent_route"),
+        "detail_level": req.detail_level,
         "pending_actions": result.get("pending_actions") or ([result["pending_action"]] if result.get("pending_action") else []),
     }
 
