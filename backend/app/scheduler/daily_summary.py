@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -183,6 +184,8 @@ class DailySummaryScheduler:
                     "sent": sent,
                     "send_method": send_result.get("method", ""),
                     "message_id": send_result.get("message_id", ""),
+                    "message_ids": send_result.get("message_ids", []),
+                    "send_parts": send_result.get("parts", 1),
                     "send_error": send_result.get("error", ""),
                 }
                 await db.add_agent_audit("daily_summary_run", result)
@@ -216,6 +219,36 @@ class DailySummaryScheduler:
     def _send_via_openclaw_weixin(self, text: str) -> dict:
         try:
             account_id, target = self._resolve_openclaw_weixin_target()
+            parts = self._split_weixin_text(text)
+            message_ids = []
+            for index, part in enumerate(parts, start=1):
+                body = part
+                if len(parts) > 1:
+                    body = f"每日微信总结 ({index}/{len(parts)})\n\n{part}"
+                result = self._send_openclaw_weixin_message(account_id, target, body)
+                if not result.get("sent"):
+                    return {
+                        "sent": False,
+                        "method": "openclaw-weixin",
+                        "message_id": message_ids[-1] if message_ids else "",
+                        "message_ids": message_ids,
+                        "error": result.get("error", ""),
+                    }
+                message_ids.append(result.get("message_id", ""))
+                if index < len(parts):
+                    time.sleep(0.8)
+            return {
+                "sent": bool(message_ids),
+                "method": "openclaw-weixin",
+                "message_id": message_ids[-1] if message_ids else "",
+                "message_ids": message_ids,
+                "parts": len(parts),
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"sent": False, "method": "openclaw-weixin", "error": str(exc)}
+
+    def _send_openclaw_weixin_message(self, account_id: str, target: str, text: str) -> dict:
+        try:
             cli = Path.home() / "AppData" / "Roaming" / "npm" / "node_modules" / "openclaw" / "openclaw.mjs"
             command = [
                 "node",
@@ -252,6 +285,34 @@ class DailySummaryScheduler:
             return {"sent": bool(message_id), "method": "openclaw-weixin", "message_id": message_id}
         except Exception as exc:  # noqa: BLE001
             return {"sent": False, "method": "openclaw-weixin", "error": str(exc)}
+
+    def _split_weixin_text(self, text: str, max_chars: int = 1200) -> list[str]:
+        clean = (text or "").strip()
+        if len(clean) <= max_chars:
+            return [clean]
+        parts: list[str] = []
+        current: list[str] = []
+        current_len = 0
+        for paragraph in clean.splitlines():
+            line = paragraph.rstrip()
+            projected = current_len + len(line) + 1
+            if current and projected > max_chars:
+                parts.append("\n".join(current).strip())
+                current = []
+                current_len = 0
+            if len(line) > max_chars:
+                if current:
+                    parts.append("\n".join(current).strip())
+                    current = []
+                    current_len = 0
+                for start in range(0, len(line), max_chars):
+                    parts.append(line[start : start + max_chars].strip())
+                continue
+            current.append(line)
+            current_len += len(line) + 1
+        if current:
+            parts.append("\n".join(current).strip())
+        return [part for part in parts if part]
 
     def _resolve_openclaw_weixin_target(self) -> tuple[str, str]:
         base = Path.home() / ".openclaw" / "openclaw-weixin"
