@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -200,10 +201,7 @@ class DailySummaryScheduler:
 
     def _send_summary(self, receiver: str, text: str) -> dict:
         if self._is_weixin_bot_receiver(receiver):
-            result = self._send_via_openclaw_weixin(text)
-            if result.get("sent"):
-                return result
-            logger.warning(f"OpenClaw bot delivery failed, falling back to WeChat automator: {result.get('error')}")
+            return self._send_via_openclaw_weixin(text)
 
         sent = self.automator.send_text(receiver, text)
         return {"sent": sent, "method": "wechat_automator"}
@@ -249,44 +247,159 @@ class DailySummaryScheduler:
 
     def _send_openclaw_weixin_message(self, account_id: str, target: str, text: str) -> dict:
         try:
-            cli = Path.home() / "AppData" / "Roaming" / "npm" / "node_modules" / "openclaw" / "openclaw.mjs"
+            plugin_api = (
+                Path.home()
+                / ".openclaw"
+                / "npm"
+                / "projects"
+                / "tencent-weixin-openclaw-weixin-7783ac86ba"
+                / "node_modules"
+                / "@tencent-weixin"
+                / "openclaw-weixin"
+                / "dist"
+                / "src"
+                / "api"
+                / "api.js"
+            )
+            if not plugin_api.exists():
+                raise RuntimeError(f"OpenClaw Weixin plugin API not found: {plugin_api}")
+            plugin_url = plugin_api.as_posix()
+            script = f"""
+import fs from 'node:fs';
+import {{ apiPostFetch, buildBaseInfo }} from 'file:///{plugin_url}';
+
+const accountId = process.env.OPENCLAW_WEIXIN_ACCOUNT_ID;
+const target = process.env.OPENCLAW_WEIXIN_TARGET;
+const accountPath = `${{process.env.USERPROFILE}}/.openclaw/openclaw-weixin/accounts/${{accountId}}.json`;
+const tokenPath = `${{process.env.USERPROFILE}}/.openclaw/openclaw-weixin/accounts/${{accountId}}.context-tokens.json`;
+const account = JSON.parse(fs.readFileSync(accountPath, 'utf8'));
+const tokens = fs.existsSync(tokenPath) ? JSON.parse(fs.readFileSync(tokenPath, 'utf8')) : {{}};
+const omitContext = process.env.OPENCLAW_WEIXIN_OMIT_CONTEXT === '1';
+const storedContextToken = tokens[target] || '';
+const contextToken = omitContext ? '' : storedContextToken;
+const text = fs.readFileSync(0, 'utf8');
+const body = {{
+  msg: {{
+    from_user_id: '',
+    to_user_id: target,
+    client_id: `wechat-ai-daily-${{Date.now()}}-${{Math.random().toString(16).slice(2)}}`,
+    message_type: 2,
+    message_state: 2,
+    item_list: [{{ type: 1, text_item: {{ text }} }}],
+    ...(contextToken ? {{ context_token: contextToken }} : {{}}),
+  }},
+  base_info: buildBaseInfo(),
+}};
+
+try {{
+  const raw = await apiPostFetch({{
+    baseUrl: account.baseUrl,
+    endpoint: 'ilink/bot/sendmessage',
+    body: JSON.stringify(body),
+    token: account.token,
+    timeoutMs: 15000,
+    label: 'WeChatAIDailySummary',
+  }});
+  let response = {{}};
+  try {{
+    response = JSON.parse(raw || '{{}}');
+  }} catch {{
+    response = {{ raw }};
+  }}
+  console.log(JSON.stringify({{
+    ok: response.ret === 0 && (response.errcode === undefined || response.errcode === 0),
+    clientId: body.msg.client_id,
+    ret: response.ret,
+    errcode: response.errcode,
+    errmsg: response.errmsg || '',
+    hasContextToken: Boolean(contextToken),
+    storedContextToken: Boolean(storedContextToken),
+    omittedContext: omitContext,
+  }}));
+}} catch (err) {{
+  console.log(JSON.stringify({{
+    ok: false,
+    error: String(err),
+    hasContextToken: Boolean(contextToken),
+    storedContextToken: Boolean(storedContextToken),
+    omittedContext: omitContext,
+  }}));
+  process.exitCode = 1;
+}}
+"""
             command = [
                 "node",
-                str(cli),
-                "message",
-                "send",
-                "--channel",
-                "openclaw-weixin",
-                "--account",
-                account_id,
-                "--target",
-                target,
-                "--message",
-                text,
-                "--json",
+                "--input-type=module",
+                "-e",
+                script,
             ]
-            completed = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=120,
-            )
-            if completed.returncode != 0:
-                return {
-                    "sent": False,
-                    "method": "openclaw-weixin",
-                    "error": (completed.stderr or completed.stdout or "").strip()[-1000:],
-                }
-            payload = json.loads(completed.stdout or "{}")
-            message_id = str(payload.get("messageId") or payload.get("payload", {}).get("result", {}).get("messageId") or "")
-            return {"sent": bool(message_id), "method": "openclaw-weixin", "message_id": message_id}
+            delays = [0, 5, 12, 30]
+            last_error: dict | None = None
+            omit_context = False
+            for attempt, delay in enumerate(delays, start=1):
+                if delay:
+                    time.sleep(delay)
+                completed = subprocess.run(
+                    command,
+                    check=False,
+                    capture_output=True,
+                    input=text,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=120,
+                    env={
+                        **os.environ,
+                        "OPENCLAW_WEIXIN_ACCOUNT_ID": account_id,
+                        "OPENCLAW_WEIXIN_TARGET": target,
+                        "OPENCLAW_WEIXIN_OMIT_CONTEXT": "1" if omit_context else "0",
+                    },
+                )
+                if completed.returncode != 0:
+                    return {
+                        "sent": False,
+                        "method": "openclaw-weixin",
+                        "error": (completed.stderr or completed.stdout or "").strip()[-1000:],
+                    }
+                payload = json.loads(completed.stdout or "{}")
+                message_id = str(payload.get("clientId") or "")
+                if payload.get("ok"):
+                    return {"sent": bool(message_id), "method": "openclaw-weixin", "message_id": message_id}
+                last_error = {"payload": payload, "message_id": message_id, "attempt": attempt}
+                if str(payload.get("ret", "")) == "-2" and payload.get("storedContextToken") and not omit_context:
+                    omit_context = True
+                    continue
+                if str(payload.get("ret", "")) != "-2" or attempt == len(delays):
+                    break
+
+            payload = (last_error or {}).get("payload") or {}
+            message_id = str((last_error or {}).get("message_id") or "")
+            return {
+                "sent": False,
+                "method": "openclaw-weixin",
+                "message_id": message_id,
+                "error": self._format_openclaw_send_error(payload, int((last_error or {}).get("attempt") or 1)),
+            }
         except Exception as exc:  # noqa: BLE001
             return {"sent": False, "method": "openclaw-weixin", "error": str(exc)}
 
-    def _split_weixin_text(self, text: str, max_chars: int = 1200) -> list[str]:
+    def _format_openclaw_send_error(self, payload: dict, attempts: int) -> str:
+        ret = payload.get("ret", "")
+        errcode = payload.get("errcode", "")
+        errmsg = payload.get("errmsg") or payload.get("error") or ""
+        hints = []
+        if str(ret) == "-2":
+            hints.append("可能被 OpenClaw/微信 iLink 限频或参数拒绝，已退避重试")
+        if payload.get("omittedContext"):
+            hints.append("已尝试去掉过期 context_token 降级发送")
+        if str(ret) == "-14" or str(errcode) == "-14":
+            hints.append("OpenClaw 会话过期，需要重新扫码登录")
+        if not payload.get("storedContextToken"):
+            hints.append("缺少 OpenClaw 会话上下文，请先在微信里给 WeixinClawBot 发一条消息刷新上下文")
+        hint = f"；{'；'.join(hints)}" if hints else ""
+        return f"OpenClaw send failed after {attempts} attempt(s): ret={ret} errcode={errcode} errmsg={errmsg}{hint}".strip()
+
+    def _split_weixin_text(self, text: str, max_chars: int = 1800) -> list[str]:
         clean = (text or "").strip()
         if len(clean) <= max_chars:
             return [clean]
