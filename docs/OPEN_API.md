@@ -181,3 +181,33 @@ curl http://<tailscale-hostname>:8090/open/v1/project/status \
 
 5. Give each external project its own API key so access can be rotated or
    revoked independently.
+
+## OpenClaw Weixin Access Boundary
+
+OpenClaw is used as a Weixin delivery bridge. Keep the WeChatAI project API
+behind `/open/v1/*`, and keep OpenClaw itself allowlisted so strangers or groups
+cannot drive the agent/tools.
+
+Recommended OpenClaw channel posture:
+
+```json
+{
+  "channels": {
+    "openclaw-weixin": {
+      "dmPolicy": "allowlist",
+      "allowFrom": ["<your-weixin-user-id>"],
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": []
+    },
+    "telegram": {
+      "dmPolicy": "allowlist",
+      "allowFrom": [],
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": []
+    }
+  }
+}
+```
+
+Apply it with `openclaw config patch --stdin`, then run
+`openclaw gateway restart` and verify with `openclaw status --deep`.
