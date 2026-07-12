@@ -167,14 +167,17 @@ them again.
 ## Tailscale Checklist
 
 1. Start the backend on the machine that has the WeChatAI database.
-2. Make sure Windows Firewall allows the backend port only for trusted networks,
+2. Set `APP_HOST=0.0.0.0` in the backend `.env` when tailnet devices need to
+   reach the API. Keep `INTERNAL_API_LOCAL_ONLY=true` so only `/open/v1/*` is
+   reachable remotely.
+3. Make sure Windows Firewall allows the backend port only for trusted networks,
    or rely on Tailscale ACLs.
-3. From another tailnet device, call:
+4. From another tailnet device, call:
 
 ```bash
 curl http://<tailscale-hostname>:8090/open/v1/project/status \
   -H "Authorization: Bearer <api_key>"
 ```
 
-4. Give each external project its own API key so access can be rotated or
+5. Give each external project its own API key so access can be rotated or
    revoked independently.
