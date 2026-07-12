@@ -57,7 +57,6 @@ def _claude_code_base_url(base_url: str) -> str:
 def _claude_code_env(settings: Any) -> dict[str, str]:
     env = {
         "ANTHROPIC_API_KEY": settings.ANTHROPIC_API_KEY,
-        "ANTHROPIC_AUTH_TOKEN": settings.ANTHROPIC_API_KEY,
     }
     base_url = _claude_code_base_url(settings.ANTHROPIC_BASE_URL)
     if base_url:

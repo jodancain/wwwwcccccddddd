@@ -735,7 +735,6 @@ class DevAgent:
         """
         env = {
             "ANTHROPIC_API_KEY": self.settings.ANTHROPIC_API_KEY,
-            "ANTHROPIC_AUTH_TOKEN": self.settings.ANTHROPIC_API_KEY,
         }
         base_url = _claude_code_base_url(self.settings.ANTHROPIC_BASE_URL)
         if base_url:
