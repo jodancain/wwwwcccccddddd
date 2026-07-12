@@ -31,6 +31,25 @@ Run:
 scripts\repair_claude_code_auth.ps1 -EnablePlannerAfterSuccess
 ```
 
+If PowerShell blocks scripts on this machine, run the wrapper instead:
+
+```bat
+scripts\repair_claude_code_auth.bat
+```
+
+On Windows, prefer running the wrapper from the local runtime checkout:
+
+```bat
+cd /d D:\MovedFromC\C-root\WeChatAI_dev\WeChatai_repo
+scripts\repair_claude_code_auth.bat
+```
+
+To inspect the current Claude Code auth state without opening login:
+
+```bat
+scripts\repair_claude_code_auth.bat -CheckOnly
+```
+
 The script:
 
 - removes stale `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and
@@ -42,6 +61,10 @@ The script:
 
 If the login step opens a browser or asks for account confirmation, complete it
 with the Claude account that owns the Max subscription.
+
+Note: this machine currently has `claude.exe`, but no `cc` command. Claude Code
+2.1.139 also does not expose a `switch` subcommand; use `--model sonnet` /
+`--model opus` or update auth/settings through `claude auth`.
 
 ## Safe Degraded Mode
 

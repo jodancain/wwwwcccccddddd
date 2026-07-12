@@ -1,7 +1,8 @@
 param(
     [string]$BackendUrl = "http://127.0.0.1:8090",
     [string]$Email = "liuchao@eerepo.com",
-    [switch]$EnablePlannerAfterSuccess
+    [switch]$EnablePlannerAfterSuccess,
+    [switch]$CheckOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,6 +35,47 @@ if (-not $claude) {
 Write-Step "Using Claude CLI: $claudePath"
 
 $settingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
+$settingsHasAuthOverrides = $false
+if (Test-Path -LiteralPath $settingsPath) {
+    $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+    if ($settings.env) {
+        foreach ($name in @("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")) {
+            if ($settings.env.PSObject.Properties.Name -contains $name) {
+                $settingsHasAuthOverrides = $true
+            }
+        }
+    }
+}
+
+$credentialsPath = Join-Path $env:USERPROFILE ".claude\.credentials.json"
+$credentialsStatus = "missing"
+if (Test-Path -LiteralPath $credentialsPath) {
+    $credentials = Get-Content -LiteralPath $credentialsPath -Raw | ConvertFrom-Json
+    $oauth = $credentials.claudeAiOauth
+    if ($oauth) {
+        $expiresAt = [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$oauth.expiresAt).LocalDateTime
+        $credentialsStatus = if ($expiresAt -lt (Get-Date)) { "expired" } else { "present" }
+        $hasRefreshToken = [bool]$oauth.refreshToken
+    } else {
+        $credentialsStatus = "unknown-format"
+        $hasRefreshToken = $false
+    }
+} else {
+    $expiresAt = $null
+    $hasRefreshToken = $false
+}
+
+if ($CheckOnly) {
+    [pscustomobject]@{
+        claudePath = $claudePath
+        settingsHasAuthOverrides = $settingsHasAuthOverrides
+        credentialsStatus = $credentialsStatus
+        credentialsExpiresAt = if ($expiresAt) { $expiresAt.ToString("yyyy-MM-dd HH:mm:ss") } else { "" }
+        credentialsHasRefreshToken = $hasRefreshToken
+    } | ConvertTo-Json -Depth 4
+    exit 0
+}
+
 if (Test-Path -LiteralPath $settingsPath) {
     $backup = Backup-File $settingsPath
     $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
@@ -48,7 +90,6 @@ if (Test-Path -LiteralPath $settingsPath) {
     Write-Step "Cleaned Claude settings auth overrides. Backup: $backup"
 }
 
-$credentialsPath = Join-Path $env:USERPROFILE ".claude\.credentials.json"
 if (Test-Path -LiteralPath $credentialsPath) {
     $credentials = Get-Content -LiteralPath $credentialsPath -Raw | ConvertFrom-Json
     $oauth = $credentials.claudeAiOauth
