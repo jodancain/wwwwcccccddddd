@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     # Server
     APP_HOST: str = "127.0.0.1"
     APP_PORT: int = 8090
+    INTERNAL_API_LOCAL_ONLY: bool = True
+    INTERNAL_API_ALLOWED_CLIENTS: str = "127.0.0.1,::1"
 
     # Data
     DATA_DIR: str = "./data"

@@ -731,6 +731,27 @@ class AppDatabase:
         )
         await self._db.commit()
 
+    async def get_latest_agent_audit(self, event_types: list[str]) -> dict | None:
+        if not event_types:
+            return None
+        placeholders = ",".join("?" for _ in event_types)
+        rows = await self._db.execute_fetchall(
+            f"""SELECT id, event_type, payload, created_at
+                FROM agent_audit_log
+                WHERE event_type IN ({placeholders})
+                ORDER BY id DESC
+                LIMIT 1""",
+            tuple(event_types),
+        )
+        if not rows:
+            return None
+        item = dict(rows[0])
+        try:
+            item["payload"] = json.loads(item.get("payload") or "{}")
+        except json.JSONDecodeError:
+            item["payload"] = {}
+        return item
+
     # --- Knowledge Base / RAG ---
 
     async def get_message_id_bounds(self) -> dict:

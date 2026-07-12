@@ -12,6 +12,10 @@ entry uses.
 For Tailscale usage, keep the service private to your tailnet and use an API key
 with only the permissions that the caller needs.
 
+The backend may listen on `0.0.0.0` for Tailscale, but `/api/*` remains
+local-only by default. Remote callers should use `/open/v1/*`, which is guarded
+by API-key permissions.
+
 ## Authentication
 
 Create an external API key from the local API management endpoint or UI. Do not

@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from pathlib import Path
@@ -63,6 +64,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _allowed_internal_api_clients() -> set[str]:
+    settings = get_settings()
+    return {
+        item.strip()
+        for item in settings.INTERNAL_API_ALLOWED_CLIENTS.split(",")
+        if item.strip()
+    }
+
+
+@app.middleware("http")
+async def restrict_internal_api_to_localhost(request, call_next):
+    settings = get_settings()
+    if settings.INTERNAL_API_LOCAL_ONLY and request.url.path.startswith("/api/"):
+        client_host = request.client.host if request.client else ""
+        if client_host not in _allowed_internal_api_clients():
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": (
+                        "Internal API is local-only. Use /open/v1/* with an API key "
+                        "for Tailscale or external project access."
+                    )
+                },
+            )
+    return await call_next(request)
 
 app.include_router(api_router, prefix="/api")
 

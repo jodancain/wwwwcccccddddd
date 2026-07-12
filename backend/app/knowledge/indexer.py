@@ -164,6 +164,7 @@ class KnowledgeIndexer:
 
     async def index_new_messages(self, limit: int = 5000) -> dict:
         async with self._task_lock:
+            settings = get_settings()
             started = time.time()
             self.status = "indexing"
             db = await get_db()

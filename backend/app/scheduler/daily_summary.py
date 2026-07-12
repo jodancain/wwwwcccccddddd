@@ -75,6 +75,8 @@ class DailySummaryScheduler:
     async def status(self) -> dict:
         config = await self.get_config()
         self._refresh_next_run_at(config)
+        db = await get_db()
+        last_run_at, last_status, last_error = await self._load_last_run_snapshot(db)
         return DailySummaryStatus(
             enabled=config.enabled,
             receiver=config.receiver,
@@ -82,9 +84,9 @@ class DailySummaryScheduler:
             hours=config.hours,
             max_messages=config.max_messages,
             running=self._running,
-            last_run_at=self._last_run_at,
-            last_status=self._last_status,
-            last_error=self._last_error,
+            last_run_at=last_run_at,
+            last_status=last_status,
+            last_error=last_error,
             next_run_at=self._next_run_at,
         ).to_dict()
 
@@ -171,6 +173,8 @@ class DailySummaryScheduler:
             self._last_run_at = now
             self._last_error = ""
             db = await get_db()
+            await db.set_setting("daily_summary.last_run_at", now, "Daily summary last run time")
+            await db.set_setting("daily_summary.last_error", "", "Daily summary last error")
             try:
                 config = await self.get_config()
                 text = await self.generate_summary(config=config)
@@ -181,6 +185,7 @@ class DailySummaryScheduler:
                     "status": self._last_status,
                     "reason": reason,
                     "receiver": config.receiver,
+                    "run_at": now,
                     "length": len(text),
                     "sent": sent,
                     "send_method": send_result.get("method", ""),
@@ -189,15 +194,44 @@ class DailySummaryScheduler:
                     "send_parts": send_result.get("parts", 1),
                     "send_error": send_result.get("error", ""),
                 }
+                await db.set_setting("daily_summary.last_status", self._last_status, "Daily summary last status")
                 await db.add_agent_audit("daily_summary_run", result)
                 return result
             except Exception as exc:  # noqa: BLE001
                 self._last_status = "failed"
                 self._last_error = str(exc)
-                result = {"status": "failed", "reason": reason, "error": str(exc)}
+                result = {"status": "failed", "reason": reason, "run_at": now, "error": str(exc)}
+                await db.set_setting("daily_summary.last_status", self._last_status, "Daily summary last status")
+                await db.set_setting("daily_summary.last_error", self._last_error, "Daily summary last error")
                 await db.add_agent_audit("daily_summary_failed", result)
                 logger.exception(f"Daily summary failed: {exc}")
                 return result
+
+    async def _load_last_run_snapshot(self, db) -> tuple[str, str, str]:
+        last_run_at = self._last_run_at or await db.get_setting("daily_summary.last_run_at", "")
+        last_status = self._last_status or await db.get_setting("daily_summary.last_status", "")
+        last_error = self._last_error or await db.get_setting("daily_summary.last_error", "")
+        if last_run_at and last_status:
+            return last_run_at, last_status, last_error
+
+        latest = await db.get_latest_agent_audit(["daily_summary_run", "daily_summary_failed"])
+        if not latest:
+            return last_run_at, last_status, last_error
+
+        payload = latest.get("payload") or {}
+        audit_run_at = str(payload.get("run_at") or latest.get("created_at") or "").replace(" ", "T")
+        audit_status = str(payload.get("status") or ("failed" if latest.get("event_type") == "daily_summary_failed" else ""))
+        audit_error = str(payload.get("error") or payload.get("send_error") or "")
+        if audit_run_at and not last_run_at:
+            last_run_at = audit_run_at
+            await db.set_setting("daily_summary.last_run_at", last_run_at, "Daily summary last run time")
+        if audit_status and not last_status:
+            last_status = audit_status
+            await db.set_setting("daily_summary.last_status", last_status, "Daily summary last status")
+        if audit_error and not last_error:
+            last_error = audit_error
+            await db.set_setting("daily_summary.last_error", last_error, "Daily summary last error")
+        return last_run_at, last_status, last_error
 
     def _send_summary(self, receiver: str, text: str) -> dict:
         if self._is_weixin_bot_receiver(receiver):
