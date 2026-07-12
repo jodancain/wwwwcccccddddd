@@ -67,7 +67,7 @@ class AgentTools:
         items = await self.db.search_knowledge(query, talker=talker, limit=bounded_limit)
         if embedding_client.configured:
             try:
-                vectors = await embedding_client.embed_texts([query])
+                vectors = await embedding_client.embed_texts([query], input_type="query")
                 vector_items = await self.db.search_knowledge_vector(
                     vectors[0],
                     model=embedding_client.model,

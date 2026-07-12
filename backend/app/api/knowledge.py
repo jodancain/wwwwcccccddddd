@@ -53,8 +53,8 @@ async def knowledge_embed_now(limit: int = Query(64, ge=1, le=256)):
 
 @router.post("/enrich-now")
 async def knowledge_enrich_now(
-    hours: int = Query(24, ge=1, le=720),
-    limit: int = Query(2000, ge=1, le=20000),
+    hours: int = Query(24, ge=0, le=720),
+    limit: int = Query(2000, ge=0, le=100000),
     max_links: int = Query(80, ge=0, le=500),
     max_images: int = Query(20, ge=0, le=100),
 ):
@@ -93,7 +93,7 @@ async def knowledge_search(req: KnowledgeSearchRequest):
     db = await get_db()
     results = await db.search_knowledge(req.query, limit=req.limit, talker=req.talker)
     if req.use_embedding and embedding_client.configured:
-        vectors = await embedding_client.embed_texts([req.query])
+        vectors = await embedding_client.embed_texts([req.query], input_type="query")
         vector_results = await db.search_knowledge_vector(
             vectors[0],
             model=embedding_client.model,

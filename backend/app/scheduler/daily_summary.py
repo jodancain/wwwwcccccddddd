@@ -246,6 +246,11 @@ class DailySummaryScheduler:
             return {"sent": False, "method": "openclaw-weixin", "error": str(exc)}
 
     def _send_openclaw_weixin_message(self, account_id: str, target: str, text: str) -> dict:
+        gateway_result = self._send_openclaw_weixin_gateway_message(account_id, target, text)
+        if gateway_result.get("sent"):
+            return gateway_result
+        logger.warning(f"OpenClaw gateway send failed, falling back to direct iLink send: {gateway_result.get('error', '')}")
+
         try:
             plugin_api = (
                 Path.home()
@@ -382,6 +387,65 @@ try {{
             }
         except Exception as exc:  # noqa: BLE001
             return {"sent": False, "method": "openclaw-weixin", "error": str(exc)}
+
+    def _send_openclaw_weixin_gateway_message(self, account_id: str, target: str, text: str) -> dict:
+        try:
+            cli_path = Path.home() / "AppData" / "Roaming" / "npm" / "openclaw.cmd"
+            completed = subprocess.run(
+                [
+                    str(cli_path) if cli_path.exists() else "openclaw.cmd",
+                    "message",
+                    "send",
+                    "--channel",
+                    "openclaw-weixin",
+                    "--account",
+                    account_id,
+                    "--target",
+                    target,
+                    "--message",
+                    text,
+                    "--json",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=180,
+                cwd=str(Path.home()),
+            )
+            combined = ((completed.stdout or "") + "\n" + (completed.stderr or "")).strip()
+            if completed.returncode != 0:
+                return {
+                    "sent": False,
+                    "method": "openclaw-weixin-gateway",
+                    "error": combined[-1200:],
+                }
+            payload = self._parse_first_json_object(combined)
+            message_id = str(payload.get("messageId") or (payload.get("payload") or {}).get("messageId") or "")
+            if not message_id:
+                result = (payload.get("payload") or {}).get("result") or {}
+                message_id = str(result.get("messageId") or "")
+            if not message_id and "Message ID:" in combined:
+                message_id = combined.rsplit("Message ID:", 1)[1].strip().split()[0]
+            return {
+                "sent": bool(message_id),
+                "method": "openclaw-weixin-gateway",
+                "message_id": message_id,
+                "error": "" if message_id else combined[-1200:],
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"sent": False, "method": "openclaw-weixin-gateway", "error": str(exc)}
+
+    def _parse_first_json_object(self, text: str) -> dict:
+        start = (text or "").find("{")
+        if start < 0:
+            return {}
+        try:
+            payload, _ = json.JSONDecoder().raw_decode(text[start:])
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
 
     def _format_openclaw_send_error(self, payload: dict, attempts: int) -> str:
         ret = payload.get("ret", "")

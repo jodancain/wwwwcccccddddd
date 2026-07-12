@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     EMBEDDING_BASE_URL: str = ""
     EMBEDDING_MODEL: str = "local-hash-768"
     EMBEDDING_BATCH_SIZE: int = 64
+    KNOWLEDGE_REALTIME_MAX_LINKS: int = 24
+    KNOWLEDGE_REALTIME_MAX_IMAGES: int = 6
 
     # AI provider: "gemini" or "openai"
     AI_PROVIDER: str = "gemini"

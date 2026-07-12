@@ -802,6 +802,15 @@ class AppDatabase:
                       MAX(chunk_id) AS max_embedded_chunk_id
                FROM knowledge_embeddings"""
         )
+        model_rows = await self._db.execute_fetchall(
+            """SELECT model,
+                      COUNT(*) AS rows,
+                      COUNT(DISTINCT chunk_id) AS embedded_chunks,
+                      MAX(chunk_id) AS max_embedded_chunk_id
+               FROM knowledge_embeddings
+               GROUP BY model
+               ORDER BY rows DESC"""
+        )
         bounds = await self.get_message_id_bounds()
         last_indexed = await self.get_setting("knowledge.last_indexed_message_id", "0")
         last_embedded = await self.get_setting("knowledge.last_embedded_chunk_id", "0")
@@ -817,6 +826,7 @@ class AppDatabase:
             "chunks": chunk_count,
             "embedded_chunks": embedded_count,
             "embedding_rows": int(embedding_rows[0]["count"] or 0) if embedding_rows else 0,
+            "embedding_models": [dict(row) for row in model_rows],
             "last_embedded_chunk_id": int(last_embedded or 0),
             "embeddings_caught_up": chunk_count > 0 and embedded_count >= chunk_count,
             "messages": int(bounds.get("count") or 0),

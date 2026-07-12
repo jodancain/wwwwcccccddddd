@@ -174,7 +174,12 @@ class KnowledgeIndexer:
                 self.status = "idle"
                 return {"status": "idle", "indexed_chunks": 0, "processed_messages": 0, "last_indexed_message_id": last_id}
 
-            messages = await source_extractor.enrich_messages(db, messages, max_links=0, max_images=0)
+            messages = await source_extractor.enrich_messages(
+                db,
+                messages,
+                max_links=max(0, int(settings.KNOWLEDGE_REALTIME_MAX_LINKS or 0)),
+                max_images=max(0, int(settings.KNOWLEDGE_REALTIME_MAX_IMAGES or 0)),
+            )
             chunks = build_message_chunks(messages)
             inserted = await db.insert_knowledge_chunks(chunks)
             max_id = max(int(item.get("id") or 0) for item in messages)
@@ -235,7 +240,7 @@ class KnowledgeIndexer:
 
             texts = [self._embedding_text(item) for item in chunks]
             try:
-                vectors = await embedding_client.embed_texts(texts)
+                vectors = await embedding_client.embed_texts(texts, input_type="document")
             except Exception as exc:  # noqa: BLE001
                 self.last_embedding_error = str(exc)
                 self.embedding_status = f"error: {exc}"

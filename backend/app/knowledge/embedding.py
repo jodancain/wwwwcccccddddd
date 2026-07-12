@@ -53,6 +53,12 @@ class EmbeddingClient:
         return (self.settings.EMBEDDING_MODEL or "local-hash-768").strip()
 
     @property
+    def provider(self) -> str:
+        if "voyageai.com" in self.base_url or self.model.startswith("voyage-"):
+            return "voyage"
+        return "openai_compatible"
+
+    @property
     def configured(self) -> bool:
         if not self.settings.EMBEDDING_ENABLED:
             return False
@@ -60,7 +66,7 @@ class EmbeddingClient:
             return True
         return bool(self.api_key and self.base_url and self.model)
 
-    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+    async def embed_texts(self, texts: list[str], input_type: str | None = None) -> list[list[float]]:
         if not texts:
             return []
         if not self.configured:
@@ -71,6 +77,8 @@ class EmbeddingClient:
 
         url = f"{self.base_url}/embeddings"
         payload = {"model": self.model, "input": texts}
+        if self.provider == "voyage" and input_type:
+            payload["input_type"] = input_type
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",

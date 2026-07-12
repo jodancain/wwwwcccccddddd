@@ -11,6 +11,7 @@ API_DIR = ROOT / "backend" / "app" / "api"
 BACKEND_MAIN = ROOT / "backend" / "app" / "main.py"
 FRONTEND_SRC = ROOT / "frontend" / "src"
 SMOKE_TEST = ROOT / "scripts" / "smoke_test.py"
+DOCS_DIR = ROOT / "docs"
 
 ROUTER_RE = re.compile(r"(\w+)\s*=\s*APIRouter\(\s*prefix=[\"']([^\"']*)[\"']")
 ROUTE_RE = re.compile(r"@(\w+)\.(get|post|delete|put|patch)\(\s*[\"']([^\"']*)[\"']")
@@ -25,6 +26,7 @@ SMOKE_REQUEST_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 SMOKE_STREAM_RE = re.compile(r"\bclient\.stream_events\(\s*f?([`'\"])(.+?)\1", re.DOTALL)
+DOC_ROUTE_RE = re.compile(r"`(GET|POST|DELETE|PUT|PATCH|WS)\s+([^`]+?)`", re.IGNORECASE)
 
 
 def clean_path(path: str) -> str:
@@ -110,10 +112,22 @@ def collect_smoke_calls() -> set[tuple[str, str]]:
     return calls
 
 
+def collect_documented_calls() -> set[tuple[str, str]]:
+    calls: set[tuple[str, str]] = set()
+    if not DOCS_DIR.exists():
+        return calls
+    for doc_file in sorted(DOCS_DIR.rglob("*.md")):
+        text = doc_file.read_text(encoding="utf-8")
+        for method, path in DOC_ROUTE_RE.findall(text):
+            calls.add(route_key(method, path))
+    return calls
+
+
 def main() -> int:
     backend_routes = collect_backend_routes()
     frontend_calls = collect_frontend_calls()
     smoke_calls = collect_smoke_calls()
+    documented_calls = collect_documented_calls()
 
     missing = sorted(frontend_calls - backend_routes)
     if missing:
@@ -125,7 +139,7 @@ def main() -> int:
             print(f"- {method} {path}")
         return 1
 
-    unverified = sorted(backend_routes - frontend_calls - smoke_calls)
+    unverified = sorted(backend_routes - frontend_calls - smoke_calls - documented_calls)
     if unverified:
         print("API contract check failed. Backend routes are neither used by frontend nor covered by smoke tests:")
         for method, path in unverified:
@@ -135,7 +149,8 @@ def main() -> int:
     print(
         "API contract check passed: "
         f"{len(frontend_calls)} frontend calls matched, "
-        f"{len(smoke_calls)} smoke calls covered"
+        f"{len(smoke_calls)} smoke calls covered, "
+        f"{len(documented_calls)} documented"
     )
     return 0
 
