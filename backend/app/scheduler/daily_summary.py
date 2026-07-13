@@ -420,7 +420,11 @@ try {{
         except Exception as exc:  # noqa: BLE001
             direct_result = {"sent": False, "method": "openclaw-weixin", "error": str(exc)}
 
-        logger.warning(f"Direct iLink send failed, falling back to OpenClaw gateway send: {direct_result.get('error', '')}")
+        direct_error = str(direct_result.get("error") or "")
+        if direct_error.startswith("OpenClaw send failed after"):
+            return direct_result
+
+        logger.warning(f"Direct iLink send failed, falling back to OpenClaw gateway send: {direct_error}")
         gateway_result = self._send_openclaw_weixin_gateway_message(account_id, target, text)
         if gateway_result.get("sent"):
             return gateway_result
