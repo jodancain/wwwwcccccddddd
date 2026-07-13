@@ -280,11 +280,7 @@ class DailySummaryScheduler:
             return {"sent": False, "method": "openclaw-weixin", "error": str(exc)}
 
     def _send_openclaw_weixin_message(self, account_id: str, target: str, text: str) -> dict:
-        gateway_result = self._send_openclaw_weixin_gateway_message(account_id, target, text)
-        if gateway_result.get("sent"):
-            return gateway_result
-        logger.warning(f"OpenClaw gateway send failed, falling back to direct iLink send: {gateway_result.get('error', '')}")
-
+        direct_result: dict | None = None
         try:
             plugin_api = (
                 Path.home()
@@ -395,11 +391,12 @@ try {{
                     },
                 )
                 if completed.returncode != 0:
-                    return {
+                    direct_result = {
                         "sent": False,
                         "method": "openclaw-weixin",
                         "error": (completed.stderr or completed.stdout or "").strip()[-1000:],
                     }
+                    break
                 payload = json.loads(completed.stdout or "{}")
                 message_id = str(payload.get("clientId") or "")
                 if payload.get("ok"):
@@ -411,16 +408,25 @@ try {{
                 if str(payload.get("ret", "")) != "-2" or attempt == len(delays):
                     break
 
-            payload = (last_error or {}).get("payload") or {}
-            message_id = str((last_error or {}).get("message_id") or "")
-            return {
-                "sent": False,
-                "method": "openclaw-weixin",
-                "message_id": message_id,
-                "error": self._format_openclaw_send_error(payload, int((last_error or {}).get("attempt") or 1)),
-            }
+            if direct_result is None:
+                payload = (last_error or {}).get("payload") or {}
+                message_id = str((last_error or {}).get("message_id") or "")
+                direct_result = {
+                    "sent": False,
+                    "method": "openclaw-weixin",
+                    "message_id": message_id,
+                    "error": self._format_openclaw_send_error(payload, int((last_error or {}).get("attempt") or 1)),
+                }
         except Exception as exc:  # noqa: BLE001
-            return {"sent": False, "method": "openclaw-weixin", "error": str(exc)}
+            direct_result = {"sent": False, "method": "openclaw-weixin", "error": str(exc)}
+
+        logger.warning(f"Direct iLink send failed, falling back to OpenClaw gateway send: {direct_result.get('error', '')}")
+        gateway_result = self._send_openclaw_weixin_gateway_message(account_id, target, text)
+        if gateway_result.get("sent"):
+            return gateway_result
+        if direct_result.get("error") and gateway_result.get("error"):
+            direct_result["gateway_error"] = gateway_result.get("error", "")
+        return direct_result
 
     def _send_openclaw_weixin_gateway_message(self, account_id: str, target: str, text: str) -> dict:
         try:
