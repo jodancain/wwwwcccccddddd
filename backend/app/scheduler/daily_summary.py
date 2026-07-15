@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import os
 import subprocess
@@ -178,7 +179,8 @@ class DailySummaryScheduler:
             try:
                 config = await self.get_config()
                 text = await self.generate_summary(config=config)
-                send_result = await asyncio.to_thread(self._send_summary, config.receiver, text)
+                html_path = self._write_summary_html(text, config, now)
+                send_result = await asyncio.to_thread(self._send_summary, config.receiver, text, html_path)
                 sent = bool(send_result.get("sent"))
                 self._last_status = "sent" if sent else "send_failed"
                 result = {
@@ -193,6 +195,8 @@ class DailySummaryScheduler:
                     "message_ids": send_result.get("message_ids", []),
                     "send_parts": send_result.get("parts", 1),
                     "send_error": send_result.get("error", ""),
+                    "html_path": str(html_path),
+                    "html_sent": bool(send_result.get("html_sent")),
                 }
                 await db.set_setting("daily_summary.last_status", self._last_status, "Daily summary last status")
                 await db.add_agent_audit("daily_summary_run", result)
@@ -233,9 +237,9 @@ class DailySummaryScheduler:
             await db.set_setting("daily_summary.last_error", last_error, "Daily summary last error")
         return last_run_at, last_status, last_error
 
-    def _send_summary(self, receiver: str, text: str) -> dict:
+    def _send_summary(self, receiver: str, text: str, html_path: Path | None = None) -> dict:
         if self._is_weixin_bot_receiver(receiver):
-            return self._send_via_openclaw_weixin(text)
+            return self._send_via_openclaw_weixin(text, html_path)
 
         sent = self.automator.send_text(receiver, text)
         return {"sent": sent, "method": "wechat_automator"}
@@ -248,9 +252,148 @@ class DailySummaryScheduler:
             "bot",
         }
 
-    def _send_via_openclaw_weixin(self, text: str) -> dict:
+    def _write_summary_html(self, text: str, config: DailySummaryConfig, run_at: str) -> Path:
+        out_dir = (self.settings.data_path / "daily_summaries").resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = "".join(ch for ch in run_at if ch.isdigit())[:14] or datetime.now().strftime("%Y%m%d%H%M%S")
+        out_path = out_dir / f"wechat_daily_summary_{stamp}.html"
+        rendered = self._render_summary_html(text, config, run_at)
+        out_path.write_text(rendered, encoding="utf-8")
+        (out_dir / "latest.html").write_text(rendered, encoding="utf-8")
+        return out_path
+
+    def _render_summary_html(self, text: str, config: DailySummaryConfig, run_at: str) -> str:
+        title = next((line.strip("# ").strip() for line in (text or "").splitlines() if line.strip()), "WeChat Daily Summary")
+        escaped_title = html.escape(title)
+        escaped_text = html.escape(text or "")
+        generated_at = html.escape(run_at.replace("T", " "))
+        hours = html.escape(str(config.hours))
+        max_messages = html.escape(str(config.max_messages))
+        return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{escaped_title}</title>
+  <style>
+    :root {{
+      color-scheme: light dark;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #15171a;
+      --muted: #69707a;
+      --border: #dfe3e8;
+      --accent: #0f8f62;
+    }}
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --bg: #111315;
+        --panel: #1b1f23;
+        --text: #eef1f4;
+        --muted: #a5adb7;
+        --border: #30363d;
+        --accent: #41d695;
+      }}
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      line-height: 1.72;
+    }}
+    main {{
+      width: min(980px, calc(100% - 28px));
+      margin: 0 auto;
+      padding: 28px 0 40px;
+    }}
+    header {{
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 18px;
+      padding-bottom: 16px;
+    }}
+    h1 {{
+      font-size: clamp(24px, 5vw, 38px);
+      line-height: 1.25;
+      margin: 0 0 10px;
+      letter-spacing: 0;
+    }}
+    .meta {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }}
+    .chip {{
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 10px;
+      background: color-mix(in srgb, var(--panel) 80%, transparent);
+    }}
+    article {{
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: clamp(16px, 4vw, 30px);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.06);
+    }}
+    pre {{
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      font: inherit;
+    }}
+    a {{ color: var(--accent); }}
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>{escaped_title}</h1>
+      <div class="meta">
+        <span class="chip">generated {generated_at}</span>
+        <span class="chip">range {hours}h</span>
+        <span class="chip">max messages {max_messages}</span>
+      </div>
+    </header>
+    <article>
+      <pre>{escaped_text}</pre>
+    </article>
+  </main>
+</body>
+</html>
+"""
+
+    def _send_via_openclaw_weixin(self, text: str, html_path: Path | None = None) -> dict:
         try:
             account_id, target = self._resolve_openclaw_weixin_target()
+            if html_path and html_path.exists():
+                file_result = self._send_openclaw_weixin_gateway_file(account_id, target, html_path)
+                if file_result.get("sent"):
+                    return {
+                        **file_result,
+                        "method": "openclaw-weixin-html-file",
+                        "html_path": str(html_path),
+                        "html_sent": True,
+                        "parts": 1,
+                    }
+                logger.warning(
+                    "OpenClaw gateway HTML daily summary send failed, falling back to direct file send: "
+                    f"{file_result.get('error', '')}"
+                )
+                file_result = self._send_openclaw_weixin_file(account_id, target, html_path)
+                if file_result.get("sent"):
+                    return {
+                        **file_result,
+                        "method": "openclaw-weixin-html-file",
+                        "html_path": str(html_path),
+                        "html_sent": True,
+                        "parts": 1,
+                    }
+                logger.warning(f"OpenClaw HTML daily summary send failed, falling back to text: {file_result.get('error', '')}")
             parts = self._split_weixin_text(text)
             message_ids = []
             for index, part in enumerate(parts, start=1):
@@ -278,6 +421,238 @@ class DailySummaryScheduler:
             }
         except Exception as exc:  # noqa: BLE001
             return {"sent": False, "method": "openclaw-weixin", "error": str(exc)}
+
+    def _send_openclaw_weixin_gateway_file(self, account_id: str, target: str, file_path: Path) -> dict:
+        try:
+            file_path = file_path.resolve()
+            cli_path = Path.home() / "AppData" / "Roaming" / "npm" / "openclaw.cmd"
+            completed = subprocess.run(
+                [
+                    str(cli_path) if cli_path.exists() else "openclaw.cmd",
+                    "message",
+                    "send",
+                    "--channel",
+                    "openclaw-weixin",
+                    "--account",
+                    account_id,
+                    "--target",
+                    target,
+                    "--media",
+                    str(file_path),
+                    "--json",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=240,
+                cwd=str(Path.home()),
+            )
+            combined = ((completed.stdout or "") + "\n" + (completed.stderr or "")).strip()
+            payload = self._parse_first_json_object(combined)
+            message_id = str(payload.get("messageId") or (payload.get("payload") or {}).get("messageId") or "")
+            if not message_id:
+                result = (payload.get("payload") or {}).get("result") or {}
+                message_id = str(result.get("messageId") or "")
+            if message_id:
+                warning = combined[-1600:] if completed.returncode != 0 else ""
+                return {
+                    "sent": True,
+                    "method": "openclaw-weixin-gateway-file",
+                    "message_id": message_id,
+                    "file_name": file_path.name,
+                    "file_size": file_path.stat().st_size if file_path.exists() else "",
+                    "error": "",
+                    "warning": warning,
+                }
+            if completed.returncode != 0:
+                return {
+                    "sent": False,
+                    "method": "openclaw-weixin-gateway-file",
+                    "error": combined[-1600:],
+                }
+            return {
+                "sent": False,
+                "method": "openclaw-weixin-gateway-file",
+                "message_id": message_id,
+                "file_name": file_path.name,
+                "file_size": file_path.stat().st_size if file_path.exists() else "",
+                "error": combined[-1600:],
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"sent": False, "method": "openclaw-weixin-gateway-file", "error": str(exc)}
+
+    def _send_openclaw_weixin_file(self, account_id: str, target: str, file_path: Path) -> dict:
+        try:
+            file_path = file_path.resolve()
+            plugin_root = (
+                Path.home()
+                / ".openclaw"
+                / "npm"
+                / "projects"
+                / "tencent-weixin-openclaw-weixin-7783ac86ba"
+                / "node_modules"
+                / "@tencent-weixin"
+                / "openclaw-weixin"
+                / "dist"
+                / "src"
+            )
+            plugin_api = plugin_root / "api" / "api.js"
+            plugin_upload = plugin_root / "cdn" / "upload.js"
+            plugin_accounts = plugin_root / "auth" / "accounts.js"
+            for required in (plugin_api, plugin_upload, plugin_accounts):
+                if not required.exists():
+                    raise RuntimeError(f"OpenClaw Weixin plugin file not found: {required}")
+
+            api_url = plugin_api.as_posix()
+            upload_url = plugin_upload.as_posix()
+            accounts_url = plugin_accounts.as_posix()
+            script = f"""
+import fs from 'node:fs';
+import path from 'node:path';
+import {{ apiPostFetch, buildBaseInfo }} from 'file:///{api_url}';
+import {{ uploadFileAttachmentToWeixin }} from 'file:///{upload_url}';
+import {{ CDN_BASE_URL }} from 'file:///{accounts_url}';
+
+const accountId = process.env.OPENCLAW_WEIXIN_ACCOUNT_ID;
+const target = process.env.OPENCLAW_WEIXIN_TARGET;
+const filePath = process.env.OPENCLAW_WEIXIN_FILE_PATH;
+const accountPath = `${{process.env.USERPROFILE}}/.openclaw/openclaw-weixin/accounts/${{accountId}}.json`;
+const tokenPath = `${{process.env.USERPROFILE}}/.openclaw/openclaw-weixin/accounts/${{accountId}}.context-tokens.json`;
+const account = JSON.parse(fs.readFileSync(accountPath, 'utf8'));
+const tokens = fs.existsSync(tokenPath) ? JSON.parse(fs.readFileSync(tokenPath, 'utf8')) : {{}};
+const omitContext = process.env.OPENCLAW_WEIXIN_OMIT_CONTEXT === '1';
+const storedContextToken = tokens[target] || '';
+const contextToken = omitContext ? '' : storedContextToken;
+const fileName = path.basename(filePath);
+const timeoutMs = 60000;
+
+try {{
+  const uploaded = await uploadFileAttachmentToWeixin({{
+    filePath,
+    fileName,
+    toUserId: target,
+    opts: {{ baseUrl: account.baseUrl, token: account.token, timeoutMs }},
+    cdnBaseUrl: account.cdnBaseUrl || CDN_BASE_URL,
+  }});
+  const clientId = `wechat-ai-daily-html-${{Date.now()}}-${{Math.random().toString(16).slice(2)}}`;
+  const body = {{
+    msg: {{
+      from_user_id: '',
+      to_user_id: target,
+      client_id: clientId,
+      message_type: 2,
+      message_state: 2,
+      item_list: [{{
+        type: 4,
+        file_item: {{
+          media: {{
+            encrypt_query_param: uploaded.downloadEncryptedQueryParam,
+            aes_key: Buffer.from(uploaded.aeskey).toString('base64'),
+            encrypt_type: 1,
+          }},
+          file_name: fileName,
+          len: String(uploaded.fileSize),
+        }},
+      }}],
+      ...(contextToken ? {{ context_token: contextToken }} : {{}}),
+    }},
+    base_info: buildBaseInfo(),
+  }};
+  const raw = await apiPostFetch({{
+    baseUrl: account.baseUrl,
+    endpoint: 'ilink/bot/sendmessage',
+    body: JSON.stringify(body),
+    token: account.token,
+    timeoutMs,
+    label: 'WeChatAIDailySummaryHtml',
+  }});
+  let response = {{}};
+  try {{
+    response = JSON.parse(raw || '{{}}');
+  }} catch {{
+    response = {{ raw }};
+  }}
+  console.log(JSON.stringify({{
+    ok: response.ret === 0 && (response.errcode === undefined || response.errcode === 0),
+    clientId,
+    fileName,
+    fileSize: uploaded.fileSize,
+    ret: response.ret,
+    errcode: response.errcode,
+    errmsg: response.errmsg || '',
+    hasContextToken: Boolean(contextToken),
+    storedContextToken: Boolean(storedContextToken),
+    omittedContext: omitContext,
+  }}));
+}} catch (err) {{
+  console.log(JSON.stringify({{
+    ok: false,
+    error: String(err),
+    hasContextToken: Boolean(contextToken),
+    storedContextToken: Boolean(storedContextToken),
+    omittedContext: omitContext,
+  }}));
+  process.exitCode = 1;
+}}
+"""
+            command = ["node", "--input-type=module", "-e", script]
+            delays = [0, 5, 12]
+            last_error: dict | None = None
+            omit_context = False
+            for attempt, delay in enumerate(delays, start=1):
+                if delay:
+                    time.sleep(delay)
+                completed = subprocess.run(
+                    command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=180,
+                    env={
+                        **os.environ,
+                        "OPENCLAW_WEIXIN_ACCOUNT_ID": account_id,
+                        "OPENCLAW_WEIXIN_TARGET": target,
+                        "OPENCLAW_WEIXIN_FILE_PATH": str(file_path),
+                        "OPENCLAW_WEIXIN_OMIT_CONTEXT": "1" if omit_context else "0",
+                    },
+                )
+                raw_output = (completed.stdout or completed.stderr or "").strip()
+                payload = self._parse_first_json_object(raw_output) if raw_output else {}
+                if not payload:
+                    payload = {"error": raw_output or f"node exited with code {completed.returncode}"}
+                message_id = str(payload.get("clientId") or "")
+                if completed.returncode == 0 and payload.get("ok"):
+                    return {
+                        "sent": bool(message_id),
+                        "method": "openclaw-weixin-html-file",
+                        "message_id": message_id,
+                        "file_name": str(payload.get("fileName") or file_path.name),
+                        "file_size": payload.get("fileSize", ""),
+                    }
+                last_error = {"payload": payload, "message_id": message_id, "attempt": attempt}
+                if str(payload.get("ret", "")) == "-2" and payload.get("storedContextToken") and not omit_context:
+                    omit_context = True
+                    continue
+                if str(payload.get("ret", "")) != "-2" or attempt == len(delays):
+                    break
+
+            payload = (last_error or {}).get("payload") or {}
+            message_id = str((last_error or {}).get("message_id") or "")
+            error = str(payload.get("error") or "")
+            if not error:
+                error = self._format_openclaw_send_error(payload, int((last_error or {}).get("attempt") or 1))
+            return {
+                "sent": False,
+                "method": "openclaw-weixin-html-file",
+                "message_id": message_id,
+                "error": error,
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"sent": False, "method": "openclaw-weixin-html-file", "error": str(exc)}
 
     def _send_openclaw_weixin_message(self, account_id: str, target: str, text: str) -> dict:
         direct_result: dict | None = None
