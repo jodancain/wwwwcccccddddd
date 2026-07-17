@@ -12,6 +12,7 @@ from pathlib import Path
 from app.config.settings import get_settings
 from app.dependencies import get_db, close_db
 from app.api.router import api_router
+from app.api.share import router as share_router
 from app.api.ws import ws_manager
 from app.scheduler.daily_summary import daily_summary_scheduler
 from app.sync.engine import sync_engine
@@ -93,6 +94,7 @@ async def restrict_internal_api_to_localhost(request, call_next):
     return await call_next(request)
 
 app.include_router(api_router, prefix="/api")
+app.include_router(share_router)
 
 # Open API (external access with API key)
 from app.api.chat_api import open_router

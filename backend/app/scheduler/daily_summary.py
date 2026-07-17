@@ -4,11 +4,13 @@ import asyncio
 import html
 import json
 import os
+import secrets
 import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 from loguru import logger
 
@@ -178,9 +180,8 @@ class DailySummaryScheduler:
             await db.set_setting("daily_summary.last_error", "", "Daily summary last error")
             try:
                 config = await self.get_config()
-                text = await self.generate_summary(config=config)
-                html_path = self._write_summary_html(text, config, now)
-                send_result = await asyncio.to_thread(self._send_summary, config.receiver, text, html_path)
+                text, html_path, share_url = await self._generate_summary_artifacts(db, config, now)
+                send_result = await asyncio.to_thread(self._send_summary, config.receiver, text, html_path, share_url)
                 sent = bool(send_result.get("sent"))
                 self._last_status = "sent" if sent else "send_failed"
                 result = {
@@ -197,6 +198,8 @@ class DailySummaryScheduler:
                     "send_error": send_result.get("error", ""),
                     "html_path": str(html_path),
                     "html_sent": bool(send_result.get("html_sent")),
+                    "share_url": share_url,
+                    "share_sent": bool(send_result.get("share_sent")),
                 }
                 await db.set_setting("daily_summary.last_status", self._last_status, "Daily summary last status")
                 await db.add_agent_audit("daily_summary_run", result)
@@ -210,6 +213,63 @@ class DailySummaryScheduler:
                 await db.add_agent_audit("daily_summary_failed", result)
                 logger.exception(f"Daily summary failed: {exc}")
                 return result
+
+    async def create_share_report(self, reason: str = "manual_reply") -> dict:
+        async with self._send_lock:
+            now = datetime.now().isoformat(timespec="seconds")
+            self._last_run_at = now
+            self._last_error = ""
+            db = await get_db()
+            await db.set_setting("daily_summary.last_run_at", now, "Daily summary last run time")
+            await db.set_setting("daily_summary.last_error", "", "Daily summary last error")
+            try:
+                config = await self.get_config()
+                text, html_path, share_url = await self._generate_summary_artifacts(db, config, now)
+                self._last_status = "ready"
+                result = {
+                    "status": self._last_status,
+                    "reason": reason,
+                    "receiver": config.receiver,
+                    "run_at": now,
+                    "length": len(text),
+                    "sent": False,
+                    "send_method": "wechat-reply-share-link",
+                    "message_id": "",
+                    "message_ids": [],
+                    "send_parts": 1,
+                    "send_error": "",
+                    "html_path": str(html_path),
+                    "html_sent": False,
+                    "share_url": share_url,
+                    "share_sent": False,
+                    "share_message": self._build_share_message(text, share_url),
+                }
+                await db.set_setting("daily_summary.last_status", self._last_status, "Daily summary last status")
+                await db.add_agent_audit("daily_summary_share_ready", result)
+                return result
+            except Exception as exc:  # noqa: BLE001
+                self._last_status = "failed"
+                self._last_error = str(exc)
+                result = {"status": "failed", "reason": reason, "run_at": now, "error": str(exc)}
+                await db.set_setting("daily_summary.last_status", self._last_status, "Daily summary last status")
+                await db.set_setting("daily_summary.last_error", self._last_error, "Daily summary last error")
+                await db.add_agent_audit("daily_summary_failed", result)
+                logger.exception(f"Daily summary share report failed: {exc}")
+                return result
+
+    async def _generate_summary_artifacts(
+        self,
+        db,
+        config: DailySummaryConfig,
+        run_at: str,
+    ) -> tuple[str, Path, str]:
+        text = await self.generate_summary(config=config)
+        html_path = self._write_summary_html(text, config, run_at)
+        share_token = await self._get_or_create_share_token(db)
+        share_url = self._build_share_url(share_token)
+        await db.set_setting("daily_summary.latest_html_path", str(html_path), "Daily summary latest HTML path")
+        await db.set_setting("daily_summary.latest_share_url", share_url, "Daily summary latest share URL")
+        return text, html_path, share_url
 
     async def _load_last_run_snapshot(self, db) -> tuple[str, str, str]:
         last_run_at = self._last_run_at or await db.get_setting("daily_summary.last_run_at", "")
@@ -237,9 +297,33 @@ class DailySummaryScheduler:
             await db.set_setting("daily_summary.last_error", last_error, "Daily summary last error")
         return last_run_at, last_status, last_error
 
-    def _send_summary(self, receiver: str, text: str, html_path: Path | None = None) -> dict:
+    async def _get_or_create_share_token(self, db) -> str:
+        token = await db.get_setting("daily_summary.share_token", "")
+        if token.strip():
+            return token.strip()
+        token = secrets.token_urlsafe(24)
+        await db.set_setting("daily_summary.share_token", token, "Daily summary share token")
+        return token
+
+    async def verify_share_token(self, token: str) -> bool:
+        if not token:
+            return False
+        db = await get_db()
+        expected = await db.get_setting("daily_summary.share_token", "")
+        return bool(expected) and secrets.compare_digest(str(token), str(expected))
+
+    def latest_summary_html_path(self) -> Path:
+        return (self.settings.data_path / "daily_summaries" / "latest.html").resolve()
+
+    def _send_summary(
+        self,
+        receiver: str,
+        text: str,
+        html_path: Path | None = None,
+        share_url: str = "",
+    ) -> dict:
         if self._is_weixin_bot_receiver(receiver):
-            return self._send_via_openclaw_weixin(text, html_path)
+            return self._send_via_openclaw_weixin(text, html_path, share_url)
 
         sent = self.automator.send_text(receiver, text)
         return {"sent": sent, "method": "wechat_automator"}
@@ -261,6 +345,56 @@ class DailySummaryScheduler:
         out_path.write_text(rendered, encoding="utf-8")
         (out_dir / "latest.html").write_text(rendered, encoding="utf-8")
         return out_path
+
+    def _build_share_url(self, token: str) -> str:
+        base = (self.settings.DAILY_SUMMARY_SHARE_BASE_URL or "").strip().rstrip("/")
+        if not base:
+            base = self._auto_share_base_url()
+        return f"{base}/share/daily/latest?token={quote(token)}"
+
+    def _auto_share_base_url(self) -> str:
+        try:
+            completed = subprocess.run(
+                ["tailscale", "ip", "-4"],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=3,
+            )
+            ip = (completed.stdout or "").strip().splitlines()[0].strip()
+            if completed.returncode == 0 and ip:
+                return f"http://{ip}:{self.settings.APP_PORT}"
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Unable to resolve Tailscale IP for daily summary share URL: {exc}")
+        host = self.settings.APP_HOST if self.settings.APP_HOST not in {"0.0.0.0", "::"} else "127.0.0.1"
+        return f"http://{host}:{self.settings.APP_PORT}"
+
+    def _build_share_message(self, text: str, share_url: str) -> str:
+        lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+        title = lines[0].strip("# ").strip() if lines else "每日微信总结"
+        preview: list[str] = []
+        for line in lines[1:]:
+            clean = line.strip().lstrip("-*•0123456789.、) ").strip()
+            if not clean or clean.startswith("#"):
+                continue
+            if len(clean) > 90:
+                clean = clean[:90].rstrip() + "..."
+            preview.append(clean)
+            if len(preview) >= 5:
+                break
+        preview_text = "\n".join(f"- {item}" for item in preview)
+        if not preview_text:
+            preview_text = "- 完整内容已生成，点下面链接查看。"
+        return (
+            "每日微信总结已生成\n\n"
+            f"{title}\n\n"
+            "重点预览：\n"
+            f"{preview_text}\n\n"
+            "打开完整报告：\n"
+            f"{share_url}"
+        )
 
     def _render_summary_html(self, text: str, config: DailySummaryConfig, run_at: str) -> str:
         title = next((line.strip("# ").strip() for line in (text or "").splitlines() if line.strip()), "WeChat Daily Summary")
@@ -367,9 +501,29 @@ class DailySummaryScheduler:
 </html>
 """
 
-    def _send_via_openclaw_weixin(self, text: str, html_path: Path | None = None) -> dict:
+    def _send_via_openclaw_weixin(
+        self,
+        text: str,
+        html_path: Path | None = None,
+        share_url: str = "",
+    ) -> dict:
         try:
             account_id, target = self._resolve_openclaw_weixin_target()
+            if share_url:
+                share_text = self._build_share_message(text, share_url)
+                share_result = self._send_openclaw_weixin_message(account_id, target, share_text)
+                if share_result.get("sent"):
+                    return {
+                        **share_result,
+                        "method": "openclaw-weixin-share-link",
+                        "share_url": share_url,
+                        "share_sent": True,
+                        "parts": 1,
+                    }
+                logger.warning(
+                    "OpenClaw share-link daily summary send failed, falling back to HTML file: "
+                    f"{share_result.get('error', '')}"
+                )
             if html_path and html_path.exists():
                 file_result = self._send_openclaw_weixin_file(account_id, target, html_path)
                 if file_result.get("sent"):

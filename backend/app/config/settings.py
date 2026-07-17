@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     DAILY_SUMMARY_RECEIVER: str = "WeixinClawBot"
     DAILY_SUMMARY_HOURS: int = 24
     DAILY_SUMMARY_MAX_MESSAGES: int = 50000
+    DAILY_SUMMARY_SHARE_BASE_URL: str = ""
 
     # Server
     APP_HOST: str = "127.0.0.1"

@@ -384,11 +384,13 @@ class WechatAgentService:
         manual_send = any(word in compact for word in ("现在", "立即", "马上", "发一次", "来一份"))
         automation_intent = any(word in compact for word in ("以后", "自动", "每天", "定时")) and not manual_send
         if manual_send and not automation_intent:
-            result = await daily_summary_scheduler.run_once(reason="wechat_agent_manual")
-            sent = "已发送" if result.get("sent") else "发送失败"
+            result = await daily_summary_scheduler.create_share_report(reason="wechat_agent_manual")
+            reply = result.get("share_message")
+            if not reply:
+                reply = f"每日微信总结生成失败：{result.get('error') or result.get('send_error') or '未知错误'}"
             return {
                 "status": result.get("status", "ok"),
-                "reply": f"{sent}每日微信总结给 {result.get('receiver', '默认接收人')}。",
+                "reply": reply,
                 "agent_route": {"route": "daily_summary", "confidence": 1.0, "reason": "manual daily summary send", "method": "local"},
                 "daily_summary_result": result,
             }
