@@ -371,19 +371,6 @@ class DailySummaryScheduler:
         try:
             account_id, target = self._resolve_openclaw_weixin_target()
             if html_path and html_path.exists():
-                file_result = self._send_openclaw_weixin_gateway_file(account_id, target, html_path)
-                if file_result.get("sent"):
-                    return {
-                        **file_result,
-                        "method": "openclaw-weixin-html-file",
-                        "html_path": str(html_path),
-                        "html_sent": True,
-                        "parts": 1,
-                    }
-                logger.warning(
-                    "OpenClaw gateway HTML daily summary send failed, falling back to direct file send: "
-                    f"{file_result.get('error', '')}"
-                )
                 file_result = self._send_openclaw_weixin_file(account_id, target, html_path)
                 if file_result.get("sent"):
                     return {
@@ -393,7 +380,23 @@ class DailySummaryScheduler:
                         "html_sent": True,
                         "parts": 1,
                     }
-                logger.warning(f"OpenClaw HTML daily summary send failed, falling back to text: {file_result.get('error', '')}")
+                logger.warning(
+                    "Strict OpenClaw HTML daily summary send failed, falling back to strict text send: "
+                    f"{file_result.get('error', '')}"
+                )
+                gateway_file_result = self._send_openclaw_weixin_gateway_file(account_id, target, html_path)
+                if gateway_file_result.get("sent"):
+                    return {
+                        **gateway_file_result,
+                        "method": "openclaw-weixin-html-file",
+                        "html_path": str(html_path),
+                        "html_sent": True,
+                        "parts": 1,
+                    }
+                logger.warning(
+                    "OpenClaw gateway HTML daily summary fallback failed, falling back to strict text send: "
+                    f"{gateway_file_result.get('error', '')}"
+                )
             parts = self._split_weixin_text(text)
             message_ids = []
             for index, part in enumerate(parts, start=1):
