@@ -15,6 +15,7 @@ from urllib.parse import quote
 from loguru import logger
 
 from app.ai.context_builder import GLOBAL_SUMMARY_SYSTEM_PROMPT, build_global_context
+from app.ai.external_context import external_context_builder
 from app.ai.fallback import fallback_global_summary
 from app.ai.gemini_provider import GeminiProvider
 from app.ai.openai_provider import OpenAIProvider
@@ -1098,36 +1099,51 @@ try {{
         messages = await source_extractor.enrich_messages(db, messages, max_links=80, max_images=20)
         provider = self._get_provider()
         context = build_global_context(messages)
+        external_context = ""
+        if self.settings.DAILY_SUMMARY_EXTERNAL_CONTEXT_ENABLED:
+            try:
+                external_context = await external_context_builder.build(
+                    messages,
+                    max_topics=self.settings.DAILY_SUMMARY_EXTERNAL_CONTEXT_MAX_TOPICS,
+                    results_per_topic=self.settings.DAILY_SUMMARY_EXTERNAL_CONTEXT_RESULTS_PER_TOPIC,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Daily summary external context failed: {exc}")
         user_msg = (
             f"请生成最近 {hours} 小时所有微信聊天记录的详细版日报。"
-            "这份日报会直接发到微信，但不要过短；目标是让我不用翻聊天记录也能掌握重点。"
-            "请至少写 3000 个中文字符，除非聊天记录本身非常少。"
-            "必须按群/联系人展开 12-20 个重点对话；每个重点对话写清楚具体内容、关键观点、风险、是否需要我回复。"
+            "这份日报会通过微信发一个预览和完整链接，所以完整报告可以写得很细；目标是让我不用翻聊天记录也能掌握重点。"
+            "请至少写 5000 个中文字符，除非聊天记录本身非常少。"
+            "必须按群/联系人展开 12-20 个重点对话；每个重点对话写清楚具体内容、参与者、时间线、关键观点、风险、是否需要我回复。"
             "投资、项目合作、求职、金钱、时间安排、需要我行动的内容优先。"
-            "不要只写宽泛分类；要给出具体群名/联系人、日期时间线索、关键词和建议动作。"
+            "如果提供了外部背景快照，请把它用于现实校准：解释聊天里的投资/汽车/法律/项目/市场信息和公开新闻或网页信息之间的关系。"
+            "外部背景必须明确标注为外部信息，不要说成微信里的人说过。"
+            "不要只写宽泛分类；要给出具体群名/联系人、日期时间线索、关键词、来源会话和建议动作。"
             "如果某些对话只是闲聊，请明确标成低优先级。"
         )
-        ai_messages = [{"role": "user", "content": f"{context}\n\n{user_msg}"}]
+        external_block = f"\n\n{external_context}" if external_context else ""
+        ai_messages = [{"role": "user", "content": f"{context}{external_block}\n\n{user_msg}"}]
         try:
             summary = await provider.chat(ai_messages, system_prompt=GLOBAL_SUMMARY_SYSTEM_PROMPT)
-            if len(summary.strip()) < 2800 and len(messages) > 500:
+            if len(summary.strip()) < 4500 and len(messages) > 500:
                 expand_msg = (
-                    f"{context}\n\n"
+                    f"{context}{external_block}\n\n"
                     "下面是刚生成的日报，但太短，不够详细：\n"
                     f"{summary}\n\n"
                     "请基于同一批聊天记录重写为更详细的微信日报。要求："
-                    "1. 至少 3000 个中文字符；"
+                    "1. 至少 5000 个中文字符；"
                     "2. 重点对话不少于 12 个；"
-                    "3. 每个重点对话写 2-4 条具体信息；"
-                    "4. 待办、风险、机会、明天关注事项要更具体；"
-                    "5. 不要说空话，不要只概括主题。"
+                    "3. 每个重点对话写 3-6 条具体信息；"
+                    "4. 外部背景校准、待办、风险、机会、明天关注事项要更具体；"
+                    "5. 给可直接复制的回复草稿；"
+                    "6. 不要说空话，不要只概括主题。"
                 )
                 summary = await provider.chat(
                     [{"role": "user", "content": expand_msg}],
                     system_prompt=GLOBAL_SUMMARY_SYSTEM_PROMPT,
                 )
-            if len(summary.strip()) < 3500 and len(messages) > 500:
+            if len(summary.strip()) < 4500 and len(messages) > 500:
                 summary = summary.strip() + "\n\n" + self._local_detail_appendix(messages)
+            summary = self._append_required_daily_notes(summary, messages)
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Daily summary AI generation failed: {exc}")
             summary = fallback_global_summary(messages, hours, exc)
@@ -1135,6 +1151,24 @@ try {{
         header = f"每日微信总结｜最近 {hours} 小时"
         body = summary.strip() or "今天没有生成有效总结。"
         return f"{header}\n\n{body}"
+
+    def _append_required_daily_notes(self, summary: str, messages: list[dict]) -> str:
+        text = summary.strip()
+        source_text = "\n".join((msg.get("content") or "") for msg in messages)
+        investment_terms = ("投资", "股票", "美股", "港股", "A股", "股价", "财报", "币", "BTC", "ETH", "SOL", "ETF")
+        has_investment = any(term in source_text or term in text for term in investment_terms)
+        if has_investment and "不构成投资建议" not in text:
+            text += (
+                "\n\n## 投资相关说明\n"
+                "以上投资、股票、币圈和市场内容只是基于微信聊天记录与公开背景信息做的信息整理，"
+                "不构成投资建议。涉及交易前请自行核实价格、公告、财报、监管信息和个人风险承受能力。"
+            )
+        if "外部背景校准" in text and "外部背景仅供参考" not in text:
+            text += (
+                "\n\n## 外部背景仅供参考\n"
+                "外部网页/新闻摘要可能存在延迟、抓取不完整或来源偏差；最终判断仍以原始聊天记录、官方公告和你自己的核验为准。"
+            )
+        return text
 
     def _local_detail_appendix(self, messages: list[dict], max_chats: int = 10) -> str:
         grouped: dict[str, list[dict]] = {}
