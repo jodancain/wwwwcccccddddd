@@ -4,6 +4,7 @@ import asyncio
 import html
 import json
 import os
+import re
 import secrets
 import subprocess
 import time
@@ -440,11 +441,14 @@ class DailySummaryScheduler:
 
     def _build_share_message(self, text: str, share_url: str) -> str:
         lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-        title = lines[0].strip("# ").strip() if lines else "每日微信总结"
+        title = self._clean_wechat_preview_line(lines[0].strip("# ").strip() if lines else "")
+        if not title or self._looks_garbled_preview(title):
+            title = "最近24小时微信总结"
         preview: list[str] = []
         for line in lines[1:]:
-            clean = line.strip().lstrip("-*•0123456789.、) ").strip()
-            if not clean or clean.startswith("#"):
+            clean = self._clean_wechat_preview_line(line)
+            clean = clean.lstrip("-*•0123456789.、) ").strip()
+            if not clean or clean.startswith("#") or self._looks_garbled_preview(clean):
                 continue
             if len(clean) > 90:
                 clean = clean[:90].rstrip() + "..."
@@ -453,7 +457,7 @@ class DailySummaryScheduler:
                 break
         preview_text = "\n".join(f"- {item}" for item in preview)
         if not preview_text:
-            preview_text = "- 完整内容已生成，点下面链接查看。"
+            preview_text = self._latest_summary_preview()
         return (
             "每日微信总结已生成\n\n"
             f"{title}\n\n"
@@ -462,6 +466,70 @@ class DailySummaryScheduler:
             "打开完整报告：\n"
             f"{share_url}"
         )
+
+    def _clean_wechat_preview_line(self, value: str) -> str:
+        clean = " ".join((value or "").split())
+        clean = clean.replace("｜", " - ").replace("—", "-").replace("–", "-")
+        clean = clean.replace("**", "").replace("__", "")
+        clean = re.sub(r"^[#>\s]+", "", clean).strip()
+        return clean
+
+    def _looks_garbled_preview(self, value: str) -> bool:
+        stripped = "".join(ch for ch in (value or "") if not ch.isspace())
+        if not stripped:
+            return True
+        question_ratio = stripped.count("?") / max(1, len(stripped))
+        return question_ratio > 0.35 or "\ufffd" in stripped
+
+    def _latest_summary_preview(self) -> str:
+        try:
+            html_path = self.latest_summary_html_path()
+            if not html_path.exists():
+                return "- 完整内容已生成，点下面链接查看。"
+            rendered = html_path.read_text(encoding="utf-8")
+            match = re.search(r"<pre>(.*?)</pre>", rendered, flags=re.S | re.I)
+            if not match:
+                return "- 完整内容已生成，点下面链接查看。"
+            plain = html.unescape(match.group(1))
+            preview = []
+            for line in plain.splitlines():
+                clean = self._clean_wechat_preview_line(line)
+                clean = clean.lstrip("-*•0123456789.、) ").strip()
+                if (
+                    not clean
+                    or clean.startswith("#")
+                    or clean.startswith("每日微信总结")
+                    or clean in self._summary_section_headings()
+                    or self._looks_garbled_preview(clean)
+                ):
+                    continue
+                if len(clean) > 90:
+                    clean = clean[:90].rstrip() + "..."
+                preview.append(clean)
+                if len(preview) >= 5:
+                    break
+            if preview:
+                return "\n".join(f"- {item}" for item in preview)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Unable to build latest summary preview fallback: {exc}")
+        return "- 完整内容已生成，点下面链接查看。"
+
+    def _summary_section_headings(self) -> set[str]:
+        return {
+            "一句话总览",
+            "数据概览",
+            "外部背景校准",
+            "重点对话详解",
+            "主题归纳",
+            "决策、承诺和待办",
+            "待办和需要回复",
+            "风险和机会",
+            "关系和情绪信号",
+            "可检索关键词",
+            "明天建议关注",
+            "投资相关说明",
+            "外部背景仅供参考",
+        }
 
     def _render_summary_html(self, text: str, config: DailySummaryConfig, run_at: str) -> str:
         title = next((line.strip("# ").strip() for line in (text or "").splitlines() if line.strip()), "WeChat Daily Summary")
