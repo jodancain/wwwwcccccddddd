@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 from loguru import logger
 
-from app.ai.context_builder import GLOBAL_SUMMARY_SYSTEM_PROMPT, build_global_context
+from app.ai.context_builder import GLOBAL_SUMMARY_SYSTEM_PROMPT, build_daily_report_evidence_pack, build_global_context
 from app.ai.external_context import external_context_builder
 from app.ai.fallback import fallback_global_summary
 from app.ai.gemini_provider import GeminiProvider
@@ -1232,7 +1232,8 @@ try {{
 
         messages = await source_extractor.enrich_messages(db, messages, max_links=80, max_images=20)
         provider = self._get_provider()
-        context = build_global_context(messages)
+        evidence_pack = build_daily_report_evidence_pack(messages)
+        context = build_global_context(messages, max_chars=145000)
         external_context = ""
         if self.settings.DAILY_SUMMARY_EXTERNAL_CONTEXT_ENABLED:
             try:
@@ -1244,38 +1245,42 @@ try {{
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"Daily summary external context failed: {exc}")
         user_msg = (
-            f"请生成最近 {hours} 小时所有微信聊天记录的详细版日报。"
+            f"请生成最近 {hours} 小时所有微信聊天记录的 Plaud/NotebookLM 风格详细版日报。"
             "这份日报会通过微信发一个预览和完整链接，所以完整报告可以写得很细；目标是让我不用翻聊天记录也能掌握重点。"
-            "请至少写 5000 个中文字符，除非聊天记录本身非常少。"
-            "必须按群/联系人展开 12-20 个重点对话；每个重点对话写清楚具体内容、参与者、时间线、关键观点、风险、是否需要我回复。"
+            "请优先使用【日报证据包】，再用原始聊天记录补充细节，最后结合外部背景做现实校准。"
+            "请至少写 6000 个中文字符；如果消息很多，写 8000-12000 字符也可以。"
+            "必须按群/联系人展开 15-25 个重点对话；每个重点对话写清楚具体内容、参与者、时间线、关键观点、风险、是否需要我回复，并给出证据线索。"
             "投资、项目合作、求职、金钱、时间安排、需要我行动的内容优先。"
+            "链接解析、图片解析必须纳入对应主题；不能只在末尾笼统提一句。"
             "如果提供了外部背景快照，请把它用于现实校准：解释聊天里的投资/汽车/法律/项目/市场信息和公开新闻或网页信息之间的关系。"
             "外部背景必须明确标注为外部信息，不要说成微信里的人说过。"
             "不要只写宽泛分类；要给出具体群名/联系人、日期时间线索、关键词、来源会话和建议动作。"
             "如果某些对话只是闲聊，请明确标成低优先级。"
+            "最后给出可检索索引，方便我后续继续问知识库。"
         )
         external_block = f"\n\n{external_context}" if external_context else ""
-        ai_messages = [{"role": "user", "content": f"{context}{external_block}\n\n{user_msg}"}]
+        ai_messages = [{"role": "user", "content": f"{evidence_pack}\n\n【原始聊天记录】\n{context}{external_block}\n\n{user_msg}"}]
         try:
             summary = await provider.chat(ai_messages, system_prompt=GLOBAL_SUMMARY_SYSTEM_PROMPT)
-            if len(summary.strip()) < 4500 and len(messages) > 500:
+            if len(summary.strip()) < 5500 and len(messages) > 500:
                 expand_msg = (
-                    f"{context}{external_block}\n\n"
+                    f"{evidence_pack}\n\n【原始聊天记录】\n{context}{external_block}\n\n"
                     "下面是刚生成的日报，但太短，不够详细：\n"
                     f"{summary}\n\n"
                     "请基于同一批聊天记录重写为更详细的微信日报。要求："
-                    "1. 至少 5000 个中文字符；"
-                    "2. 重点对话不少于 12 个；"
-                    "3. 每个重点对话写 3-6 条具体信息；"
+                    "1. 至少 7000 个中文字符；"
+                    "2. 重点对话不少于 18 个；"
+                    "3. 每个重点对话写 3-6 条具体信息和 2-4 条证据线索；"
                     "4. 外部背景校准、待办、风险、机会、明天关注事项要更具体；"
                     "5. 给可直接复制的回复草稿；"
-                    "6. 不要说空话，不要只概括主题。"
+                    "6. 链接/图片解析必须结合进相关主题；"
+                    "7. 不要说空话，不要只概括主题。"
                 )
                 summary = await provider.chat(
                     [{"role": "user", "content": expand_msg}],
                     system_prompt=GLOBAL_SUMMARY_SYSTEM_PROMPT,
                 )
-            if len(summary.strip()) < 4500 and len(messages) > 500:
+            if len(summary.strip()) < 5500 and len(messages) > 500:
                 summary = summary.strip() + "\n\n" + self._local_detail_appendix(messages)
             summary = self._append_required_daily_notes(summary, messages)
         except Exception as exc:  # noqa: BLE001
