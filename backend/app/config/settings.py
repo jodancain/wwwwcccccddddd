@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     DAILY_SUMMARY_EXTERNAL_CONTEXT_ENABLED: bool = True
     DAILY_SUMMARY_EXTERNAL_CONTEXT_MAX_TOPICS: int = 8
     DAILY_SUMMARY_EXTERNAL_CONTEXT_RESULTS_PER_TOPIC: int = 3
+    DAILY_SUMMARY_SEND_TRANSPORT_ORDER: str = "ui_auto,openclaw"
 
     # Server
     APP_HOST: str = "127.0.0.1"

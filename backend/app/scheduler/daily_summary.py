@@ -324,10 +324,76 @@ class DailySummaryScheduler:
         share_url: str = "",
     ) -> dict:
         if self._is_weixin_bot_receiver(receiver):
-            return self._send_via_openclaw_weixin(text, html_path, share_url)
+            return self._send_via_transport_order(receiver, text, html_path, share_url)
 
         sent = self.automator.send_text(receiver, text)
         return {"sent": sent, "method": "wechat_automator"}
+
+    def _send_via_transport_order(
+        self,
+        receiver: str,
+        text: str,
+        html_path: Path | None = None,
+        share_url: str = "",
+    ) -> dict:
+        failures = []
+        for transport in self._daily_summary_transport_order():
+            if transport == "ui_auto":
+                result = self._send_via_wechat_automator(receiver, text, share_url)
+            elif transport == "openclaw":
+                result = self._send_via_openclaw_weixin(text, html_path, share_url)
+            else:
+                failures.append({"transport": transport, "error": "unknown transport"})
+                continue
+
+            if result.get("sent"):
+                if failures:
+                    result = {**result, "fallback_failures": failures}
+                return result
+            failures.append(
+                {
+                    "transport": transport,
+                    "method": result.get("method", ""),
+                    "error": result.get("error", "") or "send failed",
+                }
+            )
+
+        return {
+            "sent": False,
+            "method": "daily-summary-transport-order",
+            "error": "; ".join(
+                f"{item.get('transport')}: {item.get('error')}" for item in failures
+            )[:2000],
+            "failures": failures,
+        }
+
+    def _daily_summary_transport_order(self) -> list[str]:
+        raw = self.settings.DAILY_SUMMARY_SEND_TRANSPORT_ORDER or "ui_auto,openclaw"
+        order = []
+        for item in raw.split(","):
+            name = item.strip().lower().replace("-", "_")
+            if name and name not in order:
+                order.append(name)
+        return order or ["ui_auto", "openclaw"]
+
+    def _send_via_wechat_automator(self, receiver: str, text: str, share_url: str = "") -> dict:
+        try:
+            body = self._build_share_message(text, share_url) if share_url else text
+            sent = self.automator.send_text(receiver, body)
+            return {
+                "sent": bool(sent),
+                "method": "wechat-ui-automation-share-link" if share_url else "wechat-ui-automation",
+                "parts": 1,
+                "share_url": share_url,
+                "share_sent": bool(sent and share_url),
+                "error": "" if sent else "Weixin UI automation did not report success",
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "sent": False,
+                "method": "wechat-ui-automation-share-link" if share_url else "wechat-ui-automation",
+                "error": str(exc),
+            }
 
     def _is_weixin_bot_receiver(self, receiver: str) -> bool:
         normalized = (receiver or "").strip().lower()

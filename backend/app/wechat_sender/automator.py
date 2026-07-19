@@ -28,7 +28,7 @@ class WeChatAutomator:
         import win32process
         import psutil  # shipped via pywxdump; available in venv
 
-        results: list[tuple[int, int]] = []
+        results: list[tuple[int, int, int]] = []
 
         def cb(hwnd, _acc):
             try:
@@ -46,14 +46,17 @@ class WeChatAutomator:
                 if "tray" in title.lower() or "ime" in title.lower():
                     return
                 visible = bool(win32gui.IsWindowVisible(hwnd))
-                likely_main = title in {"微信", "Weixin", "WeChat"} or visible
+                main_title = title in {"微信", "Weixin", "WeChat"}
+                likely_main = main_title or visible
                 # Skip tiny utility windows (tray bubbles, popup tips)
                 if area > 200 * 200 and likely_main:
-                    results.append((hwnd, area))
+                    # Prefer the main shell window over detached chat windows.
+                    score = area + (10_000_000 if main_title else 0) + (1_000_000 if visible else 0)
+                    results.append((hwnd, score, area))
 
         win32gui.EnumWindows(cb, None)
         results.sort(key=lambda x: x[1], reverse=True)
-        return [h for h, _ in results]
+        return [h for h, _score, _area in results]
 
     def find_wechat_window(self) -> bool:
         try:
@@ -95,6 +98,20 @@ class WeChatAutomator:
             logger.debug(f"Alt-unlock SetForegroundWindow failed: {exc}")
 
         try:
+            import pyautogui
+
+            left, top, right, bottom = win32gui.GetWindowRect(self._hwnd)
+            width = max(1, right - left)
+            height = max(1, bottom - top)
+            click_x = left + min(max(width // 2, 80), width - 20)
+            click_y = top + min(max(height // 8, 40), height - 20)
+            pyautogui.click(click_x, click_y)
+            time.sleep(0.2)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Click-to-focus Weixin window failed: {exc}")
+
+        try:
             import win32api
             import win32process
 
@@ -131,7 +148,6 @@ class WeChatAutomator:
         try:
             import pyautogui
             import pyperclip
-            import win32con
             import win32gui
         except ImportError as e:
             logger.error(f"Missing dependency for automation: {e}")
@@ -142,7 +158,15 @@ class WeChatAutomator:
                 logger.error("Weixin.exe window not found; is it running?")
                 return False
 
+        original_clipboard = ""
+        have_clipboard = False
         try:
+            try:
+                original_clipboard = pyperclip.paste()
+                have_clipboard = True
+            except Exception:  # noqa: BLE001
+                original_clipboard = ""
+
             # Restore + focus
             if not self._focus_window():
                 return False
@@ -177,6 +201,12 @@ class WeChatAutomator:
         except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to send message: {e}")
             return False
+        finally:
+            try:
+                if have_clipboard:
+                    pyperclip.copy(original_clipboard)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _send_text_subprocess(self, contact_name: str, text: str) -> bool:
         code = (
