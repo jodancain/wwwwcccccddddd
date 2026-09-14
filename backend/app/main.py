@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 from contextlib import asynccontextmanager
 
@@ -12,6 +13,7 @@ from pathlib import Path
 from app.config.settings import get_settings
 from app.dependencies import get_db, close_db
 from app.api.router import api_router
+from app.api.relay import router as relay_router
 from app.api.share import router as share_router
 from app.api.ws import ws_manager
 from app.scheduler.daily_summary import daily_summary_scheduler
@@ -79,7 +81,8 @@ def _allowed_internal_api_clients() -> set[str]:
 @app.middleware("http")
 async def restrict_internal_api_to_localhost(request, call_next):
     settings = get_settings()
-    if settings.INTERNAL_API_LOCAL_ONLY and request.url.path.startswith("/api/"):
+    internal_path = request.url.path.startswith(("/api/", "/relay/"))
+    if settings.INTERNAL_API_LOCAL_ONLY and internal_path:
         client_host = request.client.host if request.client else ""
         if client_host not in _allowed_internal_api_clients():
             return JSONResponse(
@@ -94,6 +97,7 @@ async def restrict_internal_api_to_localhost(request, call_next):
     return await call_next(request)
 
 app.include_router(api_router, prefix="/api")
+app.include_router(relay_router)
 app.include_router(share_router)
 
 # Open API (external access with API key)
@@ -113,7 +117,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
 # Serve frontend static files (production build). In the PyInstaller build,
 # frontend/dist is bundled under sys._MEIPASS.
-if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+frontend_dist_override = os.getenv("WECHATAI_FRONTEND_DIST", "").strip()
+if frontend_dist_override:
+    frontend_dist = Path(frontend_dist_override).expanduser().resolve()
+elif getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
     frontend_dist = Path(sys._MEIPASS) / "frontend" / "dist"
 else:
     frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"

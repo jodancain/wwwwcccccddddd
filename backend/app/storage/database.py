@@ -319,6 +319,44 @@ class AppDatabase:
         )
         return [dict(r) for r in rows]
 
+    async def get_all_history_context_messages(self, limit: int = 50000, per_talker_limit: int = 120) -> list[dict]:
+        """Load a bounded all-history context sample across every conversation."""
+        per_talker_limit = max(1, int(per_talker_limit or 1))
+        talkers = await self._db.execute_fetchall(
+            """SELECT talker
+               FROM messages
+               GROUP BY talker
+               ORDER BY MAX(create_time) DESC"""
+        )
+        if not talkers:
+            return []
+
+        if limit and limit > 0:
+            per_talker_limit = max(1, min(per_talker_limit, limit // max(1, len(talkers))))
+
+        out: list[dict] = []
+        for item in talkers:
+            rows = await self._db.execute_fetchall(
+                """SELECT * FROM (
+                       SELECT m.id, m.wechat_local_id, m.talker, m.sender, m.type, m.type_name, m.is_sender,
+                              m.content, m.display_content, m.create_time, m.create_date, m.is_group,
+                              c.nickname, c.remark
+                       FROM messages m
+                       LEFT JOIN contacts c ON m.talker = c.username
+                       WHERE m.talker = ?
+                       ORDER BY m.create_time DESC
+                       LIMIT ?
+                   )
+                   ORDER BY create_time ASC""",
+                (item["talker"], per_talker_limit),
+            )
+            out.extend(dict(r) for r in rows)
+
+        out.sort(key=lambda msg: int(msg.get("create_time") or 0))
+        if limit and limit > 0 and len(out) > limit:
+            out = out[-limit:]
+        return out
+
     async def get_global_message_overview(self) -> dict:
         """Return aggregate coverage for all synchronized messages."""
         totals = await self._db.execute_fetchall(

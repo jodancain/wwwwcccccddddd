@@ -18,8 +18,15 @@ by API-key permissions.
 
 ## Authentication
 
-Create an external API key from the local API management endpoint or UI. Do not
+Create an external API key from the local-only management endpoint. The full
+key is returned once; later list responses only show a masked preview. Do not
 commit real keys to Git.
+
+```bash
+curl http://127.0.0.1:8090/api/chat-apis/create-agent \
+  -H "Content-Type: application/json" \
+  -d '{"name":"My project","permissions":["all"]}'
+```
 
 Preferred header:
 
@@ -184,7 +191,9 @@ curl http://<tailscale-hostname>:8090/open/v1/project/status \
 
 ## OpenClaw Weixin Access Boundary
 
-OpenClaw is used as a Weixin delivery bridge. Keep the WeChatAI project API
+OpenClaw is used only as a Weixin transport. Its local model provider forwards
+the latest user message to `/relay/v1/messages`; WeChatAI owns intent routing,
+Claude calls, RAG, development actions, and confirmations. Keep the project API
 behind `/open/v1/*`, and keep OpenClaw itself allowlisted so strangers or groups
 cannot drive the agent/tools.
 
@@ -209,5 +218,6 @@ Recommended OpenClaw channel posture:
 }
 ```
 
-Apply it with `openclaw config patch --stdin`, then run
-`openclaw gateway restart` and verify with `openclaw status --deep`.
+Run `scripts/configure_openclaw_direct_relay.ps1`, restart the gateway, and
+verify that `openclaw agent --message "每日总结状态" --json` reports provider
+`wechatai` and model `wechatai-direct-agent`.

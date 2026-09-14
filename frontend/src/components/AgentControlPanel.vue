@@ -75,8 +75,8 @@
             <input v-model="daily.time" type="time" />
           </label>
           <label>
-            <span>小时</span>
-            <input v-model.number="daily.hours" min="1" max="720" type="number" />
+            <span>范围小时</span>
+            <input v-model.number="daily.hours" min="0" max="720" type="number" />
           </label>
           <label class="wide">
             <span>接收人</span>
@@ -132,13 +132,16 @@ const form = reactive({
 })
 const daily = reactive({
   enabled: false,
-  receiver: '文件传输助手',
+  receiver: 'WeixinClawBot',
   time: '09:00',
-  hours: 24,
+  hours: 0,
   next_run_at: '',
 })
 
-const dailyStatusText = computed(() => daily.enabled ? '开启' : '关闭')
+const dailyStatusText = computed(() => {
+  const range = daily.hours <= 0 ? '全部已同步' : `最近 ${daily.hours} 小时`
+  return `${daily.enabled ? '开启' : '关闭'}｜${range}`
+})
 
 function applyStatus(data: any) {
   status.value = data
@@ -152,9 +155,9 @@ function applyStatus(data: any) {
   form.claude_code_planner_enabled = !!data.claude_code_planner_enabled
   const summary = data.daily_summary || {}
   daily.enabled = !!summary.enabled
-  daily.receiver = summary.receiver || '文件传输助手'
+  daily.receiver = summary.receiver || 'WeixinClawBot'
   daily.time = summary.time || '09:00'
-  daily.hours = Number(summary.hours || 24)
+  daily.hours = Number(summary.hours ?? 0)
   daily.next_run_at = summary.next_run_at || ''
 }
 
@@ -217,7 +220,7 @@ async function saveDaily() {
     daily.enabled = !!summary.enabled
     daily.receiver = summary.receiver || daily.receiver
     daily.time = summary.time || daily.time
-    daily.hours = Number(summary.hours || daily.hours)
+    daily.hours = Number(summary.hours ?? daily.hours)
     daily.next_run_at = summary.next_run_at || ''
     return '每日总结配置已保存'
   })

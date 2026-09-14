@@ -11,6 +11,11 @@ const backendWsUrl = backendUrl.replace(/^http/, 'ws')
 
 export default defineConfig({
   plugins: [vue()],
+  resolve: {
+    // Keep module ids on the path Vite was launched from. This avoids raw,
+    // untransformed .vue responses when a parent directory is a junction.
+    preserveSymlinks: true,
+  },
   css: {
     // Keep this project isolated from PostCSS configs in parent directories.
     postcss: {},

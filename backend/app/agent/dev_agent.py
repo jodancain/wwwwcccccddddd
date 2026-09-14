@@ -221,7 +221,13 @@ class DevAgent:
                     used_claude=False,
                 )
             if self._openai_compatible_configured():
-                text, pending = await self._run_openai_tool_loop(message)
+                try:
+                    text, pending = await self._run_openai_tool_loop(message)
+                except (urllib.error.URLError, TimeoutError) as exc:
+                    if not self._anthropic_configured():
+                        raise
+                    logger.warning(f"OpenAI-compatible dev agent unavailable; falling back to Anthropic: {exc}")
+                    text, pending = await self._run_tool_loop(message)
             else:
                 text, pending = await self._run_tool_loop(message)
             return DevAgentResult(text=text, used_claude=True, pending_actions=pending)

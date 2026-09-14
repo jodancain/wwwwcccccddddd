@@ -210,7 +210,7 @@ class ClaudeDirectAgent:
             return (
                 f"Claude 当前没有回复成功：{reason}。\n"
                 "说明：OpenClaw/WeixinClawBot 只是微信转发入口；后端 Agent 已收到消息。"
-                "每日总结当前配置为发到“文件传输助手”，你可以发“现在发一次每日总结”触发一次。"
+                "每日总结当前配置为通过 OpenClaw 发到 WeixinClawBot，你可以发“现在发一次每日总结”生成最新报告链接。"
                 "补充 Claude 网关余额或换可用 API Key 后，普通 Claude 对话会自动恢复。"
             )
         return (

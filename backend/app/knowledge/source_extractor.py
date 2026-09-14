@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import re
+import urllib.error
+import urllib.request
+from datetime import datetime
 from html.parser import HTMLParser
 from typing import Any
 
@@ -100,7 +104,10 @@ class SourceExtractor:
             if url:
                 out.append({"kind": "link", "key": url, "meta": display})
 
-        for url in re.findall(r"https?://[^\s<>'\"，。！？）)]+", content):
+        for raw_url in re.findall(r"https?://[^\s<>'\"，。！？）)]+", content):
+            url = re.split(r"[\u3400-\u9fff]", raw_url, maxsplit=1)[0].rstrip(".,;:!?]")
+            if not url:
+                continue
             out.append({"kind": "link", "key": url, "meta": {"url": url}})
 
         if int(item.get("type") or 0) == 3 or content.startswith("[图片]"):
@@ -162,18 +169,36 @@ class SourceExtractor:
 
     def _should_retry_cached(self, source: dict, cached: dict) -> bool:
         status = cached.get("status") or ""
-        if status in {"error", "empty", "missing_media"}:
-            return True
+        if status in {"error", "empty", "missing_media", "partial"}:
+            if status == "missing_media":
+                retry_after = 6 * 3600
+            elif status == "partial":
+                retry_after = 7 * 24 * 3600
+            else:
+                retry_after = 24 * 3600
+            return self._cache_age_seconds(cached) >= retry_after
         if source.get("kind") == "image":
             metadata = cached.get("metadata") or {}
             text = cached.get("extracted_text") or ""
-            if metadata.get("vision") is False and "暂未解析到本地图片" in text:
-                return True
+            if metadata.get("vision") is False and any(
+                marker in text for marker in ("暂未解析到本地图片", "未配置视觉模型", "暂不能生成图片描述")
+            ):
+                return self._cache_age_seconds(cached) >= 6 * 3600
         return False
+
+    def _cache_age_seconds(self, cached: dict) -> float:
+        try:
+            updated = datetime.fromisoformat(str(cached.get("updated_at") or ""))
+            now = datetime.now(updated.tzinfo) if updated.tzinfo else datetime.now()
+            return max(0.0, (now - updated).total_seconds())
+        except (TypeError, ValueError):
+            return float("inf")
 
     def _status_for_extracted(self, kind: str, text: str, metadata: dict) -> str:
         if not text:
             return "empty"
+        if kind == "link" and metadata.get("fetch_error"):
+            return "partial"
         if kind == "image" and metadata.get("missing_media"):
             return "missing_media"
         return "ok"
@@ -191,10 +216,20 @@ class SourceExtractor:
             pieces.append(f"来源：{source}")
         pieces.append(f"URL：{url}")
 
-        fetched = await self._fetch_web_text(url)
+        fetched = ""
+        fetch_error = ""
+        try:
+            fetched = await self._fetch_web_text(url)
+        except Exception as exc:  # noqa: BLE001
+            fetch_error = str(exc)[:500]
         if fetched:
             pieces.append(f"网页正文摘要：{fetched}")
-        return "\n".join(pieces), {**meta, "url": url, "fetched": bool(fetched)}
+        return "\n".join(pieces), {
+            **meta,
+            "url": url,
+            "fetched": bool(fetched),
+            "fetch_error": fetch_error,
+        }
 
     async def _fetch_web_text(self, url: str) -> str:
         async with httpx.AsyncClient(
@@ -225,7 +260,9 @@ class SourceExtractor:
         raw, mime = self.media_resolver.load_image_bytes(local_id) if local_id else (None, None)
         if not raw or not mime:
             return ("图片消息：暂未解析到本地图片文件。", {**meta, "local_id": local_id, "vision": False, "missing_media": True})
-        if not self.settings.OPENAI_API_KEY or not self.settings.OPENAI_BASE_URL:
+        openai_ready = bool(self.settings.OPENAI_API_KEY and self.settings.OPENAI_BASE_URL)
+        anthropic_ready = bool(self.settings.ANTHROPIC_API_KEY and self.settings.ANTHROPIC_BASE_URL)
+        if not openai_ready and not anthropic_ready:
             return ("图片消息：已定位本地图片，但未配置视觉模型，暂不能生成图片描述。", {**meta, "local_id": local_id, "vision": False})
 
         if len(raw) > 8 * 1024 * 1024:
@@ -236,6 +273,39 @@ class SourceExtractor:
 
         encoded = base64.b64encode(raw).decode("ascii")
         data_url = f"data:{mime};base64,{encoded}"
+        prompt = "请用中文提取这张微信图片里的可用信息：先做OCR文字识别，再描述图片内容、人物/物品/截图主题、可能需要用户关注的点。控制在300字内。"
+        errors: list[str] = []
+        if openai_ready:
+            try:
+                text = await self._extract_image_openai(data_url, prompt)
+                if text:
+                    return f"图片解析：{text}", {
+                        **meta,
+                        "local_id": local_id,
+                        "mime": mime,
+                        "vision": True,
+                        "vision_provider": "openai-compatible",
+                    }
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"OpenAI-compatible: {exc}")
+
+        if anthropic_ready:
+            try:
+                text = await asyncio.to_thread(self._extract_image_anthropic, encoded, mime, prompt)
+                if text:
+                    return f"图片解析：{text}", {
+                        **meta,
+                        "local_id": local_id,
+                        "mime": mime,
+                        "vision": True,
+                        "vision_provider": "anthropic",
+                    }
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"Anthropic: {exc}")
+
+        raise RuntimeError("; ".join(errors) or "Vision providers returned no text")
+
+    async def _extract_image_openai(self, data_url: str, prompt: str) -> str:
         payload = {
             "model": self.settings.OPENAI_MODEL,
             "messages": [
@@ -244,7 +314,7 @@ class SourceExtractor:
                     "content": [
                         {
                             "type": "text",
-                            "text": "请用中文提取这张微信图片里的可用信息：先做OCR文字识别，再描述图片内容、人物/物品/截图主题、可能需要用户关注的点。控制在300字内。",
+                            "text": prompt,
                         },
                         {"type": "image_url", "image_url": {"url": data_url}},
                     ],
@@ -262,7 +332,50 @@ class SourceExtractor:
             response.raise_for_status()
             data = response.json()
         text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        return f"图片解析：{text.strip()}", {**meta, "local_id": local_id, "mime": mime, "vision": True}
+        return text.strip()
+
+    def _extract_image_anthropic(self, encoded: str, mime: str, prompt: str) -> str:
+        payload = {
+            "model": self.settings.CLAUDE_MODEL,
+            "max_tokens": 1000,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime,
+                                "data": encoded,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        }
+        request = urllib.request.Request(
+            self.settings.ANTHROPIC_BASE_URL.rstrip("/") + "/messages",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": self.settings.ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:1000]
+            raise RuntimeError(f"Anthropic HTTP {exc.code}: {detail}") from exc
+        return "\n".join(
+            str(block.get("text"))
+            for block in data.get("content") or []
+            if isinstance(block, dict) and block.get("type") == "text" and block.get("text")
+        ).strip()
 
 
 source_extractor = SourceExtractor()

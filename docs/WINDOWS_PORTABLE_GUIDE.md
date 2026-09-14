@@ -87,7 +87,7 @@ http://127.0.0.1:8090
 data\
 ```
 
-所有聊天记录和解密后的数据库都只保存在本机，不会上传到 WeChatAI 之外的服务器。
+聊天数据库、索引和报告文件保存在本机。启用云端 Claude/OpenAI、Voyage embedding、图片理解或链接抓取时，完成对应功能所需的文本、图片或 URL 会发送到 `.env` 中配置的服务商；请按自己的隐私要求选择提供商和功能。
 
 ## 5. 微信里直接问 Agent
 
@@ -103,11 +103,11 @@ data\
 
 网页右下角的 `Agent` 按钮可以打开 Agent 控制台。这里可以查看：
 
-- `transport_mode=openclaw_forward`：微信消息由 OpenClaw 插件转发到 `/api/agent/chat`，这是推荐模式。
+- `transport_mode=openclaw_direct_relay`：OpenClaw 只负责微信收发，并把消息转到本机 `/relay/v1/messages`；意图识别、Claude、知识库和开发动作都由 WeChatAI Agent 执行，这是推荐模式。
 - `local_polling`：后端直接轮询本地微信数据库里的入口会话；只有本地数据库能同步到 `WeixinClawBot` 会话时才会显示已绑定。
 - 每日总结、智能路由、开发模式、自动执行和 Claude Code planner 开关。
 
-如果状态里 `bound=false` 但 `openclaw_forward_ready=true`，说明 OpenClaw 转发模式可用，不代表微信入口不可用。
+如果状态里 `bound=false` 但 `openclaw_forward_ready=true`，说明 OpenClaw 直连转发模式可用，不代表微信入口不可用。`ret=-2` 或 `prepare failed` 则表示微信授权上下文已失效，需要重新扫码。
 
 常用问题：
 
@@ -170,7 +170,7 @@ Claude Agent SDK -> Claude Code CLI -> Anthropic Messages fallback
 
 创建一个只允许对话、不允许确认执行动作的 Agent API Key：
 ```http
-POST http://127.0.0.1:8092/api/chat-apis/create-agent
+POST http://127.0.0.1:8090/api/chat-apis/create-agent
 Content-Type: application/json
 
 {
@@ -181,7 +181,7 @@ Content-Type: application/json
 
 调用 Agent：
 ```http
-POST http://127.0.0.1:8092/open/v1/agent/chat
+POST http://127.0.0.1:8090/open/v1/agent/chat
 Authorization: Bearer wca_xxx
 Content-Type: application/json
 
@@ -202,13 +202,13 @@ Content-Type: application/json
 
 确认动作需要单独授权：
 ```http
-POST http://127.0.0.1:8092/open/v1/agent/actions/{action_id}/confirm
+POST http://127.0.0.1:8090/open/v1/agent/actions/{action_id}/confirm
 Authorization: Bearer wca_xxx
 ```
 
 查看当前 key 的 Agent 状态：
 ```http
-GET http://127.0.0.1:8092/open/v1/agent/status
+GET http://127.0.0.1:8090/open/v1/agent/status
 Authorization: Bearer wca_xxx
 ```
 

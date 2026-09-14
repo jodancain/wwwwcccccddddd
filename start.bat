@@ -1,6 +1,14 @@
 @echo off
 chcp 65001 >nul 2>&1
 title WeChatAI - 智能微信助手
+cd /d "%~dp0"
+
+set "PROJECT_DIR=%CD%"
+set "BACKEND_DIR=%PROJECT_DIR%\backend"
+if exist "%PROJECT_DIR%\..\backend\.env" set "BACKEND_DIR=%PROJECT_DIR%\..\backend"
+set "BACKEND_PYTHON=python"
+if exist "%BACKEND_DIR%\.venv\Scripts\python.exe" set "BACKEND_PYTHON=%BACKEND_DIR%\.venv\Scripts\python.exe"
+set "WECHATAI_FRONTEND_DIST=%PROJECT_DIR%\frontend\dist"
 
 echo ==========================================
 echo    WeChatAI - Cursor 版微信
@@ -8,7 +16,7 @@ echo ==========================================
 echo.
 
 :: Check Python
-python --version >nul 2>&1
+"%BACKEND_PYTHON%" --version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python 未安装，请先安装 Python 3.10+
     pause
@@ -23,11 +31,11 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: Check .env
-if not exist "backend\.env" (
+:: Prefer the sibling deployed backend when it owns the live .env and database.
+if not exist "%BACKEND_DIR%\.env" (
     if exist ".env" (
         echo [INFO] 复制 .env 到 backend 目录...
-        copy ".env" "backend\.env" >nul
+        copy ".env" "%BACKEND_DIR%\.env" >nul
     ) else (
         echo [ERROR] 未找到 .env 配置文件
         echo        请复制 .env.example 为 .env 并填入你的 API Key
@@ -37,11 +45,11 @@ if not exist "backend\.env" (
 )
 
 :: Install backend deps if needed
-if not exist "backend\data" (
+if not exist "%BACKEND_DIR%\data" (
     echo [INFO] 首次运行，安装后端依赖...
-    cd backend
-    pip install -r requirements.txt -q
-    cd ..
+    pushd "%BACKEND_DIR%"
+    "%BACKEND_PYTHON%" -m pip install -r requirements.txt -q
+    popd
     echo.
 )
 
@@ -54,13 +62,27 @@ if not exist "frontend\node_modules" (
     echo.
 )
 
+:: Ensure the OpenClaw Weixin gateway is available for inbound forwarding
+:: and proactive daily-summary delivery. A disabled scheduled task is common
+:: on Windows, so the helper can launch the existing gateway.cmd directly.
+echo [INFO] 配置 OpenClaw 仅转发到 WeChatAI Agent...
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\configure_openclaw_direct_relay.ps1"
+if errorlevel 1 (
+    echo [WARN] OpenClaw 直连 Agent 配置未完成；请检查 OpenClaw CLI。
+)
+
+echo [INFO] 检查 OpenClaw 微信网关...
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\ensure_openclaw_gateway.ps1"
+if errorlevel 1 (
+    echo [WARN] OpenClaw 网关未就绪；网页仍会启动，但微信收发暂不可用。
+)
+echo.
+
 :: Check if frontend is built, if so use production mode
 if exist "frontend\dist\index.html" (
     echo [INFO] 检测到前端构建文件，使用生产模式
     echo [INFO] 启动后端...
-    cd backend
-    start /B python run.py
-    cd ..
+    start "" /B /D "%BACKEND_DIR%" "%BACKEND_PYTHON%" run.py
     echo.
     echo ==========================================
     echo    WeChatAI 已启动!
@@ -75,9 +97,7 @@ if exist "frontend\dist\index.html" (
 
     :: Start backend
     echo [1/2] 启动后端 (端口 8090)...
-    cd backend
-    start "WeChatAI-Backend" cmd /c "python run.py"
-    cd ..
+    start "WeChatAI-Backend" /D "%BACKEND_DIR%" "%BACKEND_PYTHON%" run.py
 
     :: Wait for backend
     timeout /t 3 /nobreak >nul

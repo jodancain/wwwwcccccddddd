@@ -189,6 +189,16 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             f"status={status} running={realtime.get('running') if isinstance(realtime, dict) else 'n/a'}",
         )
 
+        status, share_missing_auth = client.request("GET", "/share/daily/latest")
+        add(
+            checks,
+            "daily share requires token",
+            status == 403
+            and isinstance(share_missing_auth, dict)
+            and "token" in str(share_missing_auth.get("detail", "")).lower(),
+            f"status={status}",
+        )
+
         ws_ok, ws_detail = _websocket_probe(websocket_url(base_url))
         add(checks, "websocket connect", ws_ok, ws_detail)
 
@@ -395,6 +405,47 @@ def run(base_url: str, include_heavy: bool = False) -> list[Check]:
             status == 200
             and isinstance(agent_status, dict)
             and _has_keys(agent_status, {"enabled", "entry_name", "bound", "claude_configured", "pending_actions"}),
+            f"status={status}",
+        )
+
+        status, relay_models = client.request("GET", "/relay/v1/models")
+        relay_model_items = relay_models.get("data", []) if isinstance(relay_models, dict) else []
+        add(
+            checks,
+            "local direct relay models",
+            status == 200
+            and bool(relay_model_items)
+            and relay_model_items[0].get("id") == "wechatai-direct-agent",
+            f"status={status}",
+        )
+
+        relay_body = {
+            "model": "wechatai-direct-agent",
+            "messages": [{"role": "user", "content": "每日总结状态"}],
+        }
+        status, relay_reply = client.request("POST", "/relay/v1/messages", relay_body)
+        relay_content = relay_reply.get("content", []) if isinstance(relay_reply, dict) else []
+        add(
+            checks,
+            "local direct relay reply",
+            status == 200
+            and bool(relay_content)
+            and "每日微信总结当前" in str(relay_content[0].get("text") or ""),
+            f"status={status}",
+        )
+
+        status, relay_stream = client.request(
+            "POST",
+            "/relay/v1/messages",
+            {**relay_body, "stream": True},
+        )
+        add(
+            checks,
+            "local direct relay stream",
+            status == 200
+            and isinstance(relay_stream, str)
+            and "content_block_delta" in relay_stream
+            and "message_stop" in relay_stream,
             f"status={status}",
         )
 

@@ -54,10 +54,24 @@ GLOBAL_SUMMARY_SYSTEM_PROMPT = """你是用户的私人微信情报分析助手�
 请按以下结构输出：
 
 ## 一句话总览
-用 1-2 句说明过去 24 小时最重要的变化和风险。
+用 1-2 句说明用户要求范围内最重要的变化和风险。
 
 ## 数据概览
 写明对话数、消息数、最活跃的几个会话、主要主题、明显高优先级事项。
+
+## 决策、承诺和待办
+像会议纪要一样拆成：
+- 已明确决定
+- 他人承诺/等待别人
+- 你需要做
+- 只是可选关注
+每条尽量写负责人、对象、时间线和建议下一步。
+
+## 待办和需要回复
+列出明确待办、潜在待办、建议回复对象，并给可直接复制的回复草稿。没有也要说“暂无明确必须回复”。
+
+## 风险和机会
+列出投资风险、项目风险、法律/合规风险、关系风险、信息机会。对投资相关内容必须提示“不构成投资建议”，并区分聊天观点与公开信息。
 
 ## 外部背景校准
 如果有外部背景快照，列出 3-8 条和聊天内容真正相关的外部信息：
@@ -79,20 +93,6 @@ GLOBAL_SUMMARY_SYSTEM_PROMPT = """你是用户的私人微信情报分析助手�
 
 ## 主题归纳
 按主题归纳，例如：求职、人际、汽车、投资、项目、生活。每个主题写具体内容和来源会话。
-
-## 决策、承诺和待办
-像会议纪要一样拆成：
-- 已明确决定
-- 他人承诺/等待别人
-- 你需要做
-- 只是可选关注
-每条尽量写负责人、对象、时间线和建议下一步。
-
-## 待办和需要回复
-列出明确待办、潜在待办、建议回复对象，并给可直接复制的回复草稿。没有也要说“暂无明确必须回复”。
-
-## 风险和机会
-列出投资风险、项目风险、法律/合规风险、关系风险、信息机会。对投资相关内容必须提示“不构成投资建议”，并区分聊天观点与公开信息。
 
 ## 关系和情绪信号
 总结哪些人/群情绪明显、可能需要安抚、推进或保持距离。
@@ -252,6 +252,7 @@ def build_global_context(messages: list[dict], max_chars: int = 180000) -> str:
     parts = [f"以下是微信聊天记录，范围 {date_range}，共 {len(groups)} 个对话、{total_msgs} 条消息。\n"]
     char_count = len(parts[0])
 
+    omitted_talkers = 0
     for talker in sorted_talkers:
         msgs = groups[talker]
         name = talker_names[talker]
@@ -280,14 +281,18 @@ def build_global_context(messages: list[dict], max_chars: int = 180000) -> str:
 
         section = "\n".join(lines)
         if char_count + len(section) > max_chars:
-            parts.append(f"\n===== {name} ({chat_type}, {len(msgs)} 条消息) =====")
-            parts.append(f"内容较多，已省略。最后一条：{(msgs[-1].get('content') or '')[:80]}")
+            omitted_talkers += 1
             continue
 
         parts.append(section)
         char_count += len(section)
 
-    return "\n".join(parts)
+    result = "\n".join(parts)
+    if omitted_talkers:
+        footer = f"\n\n【上下文长度限制】另有 {omitted_talkers} 个会话未在原始片段中展开，完整覆盖情况请以日报证据包和全量库统计为准。"
+        available = max(0, max_chars - len(footer))
+        result = result[:available].rstrip() + footer
+    return result
 
 
 def build_conversation_context(

@@ -15,7 +15,13 @@ from urllib.parse import quote
 
 from loguru import logger
 
-from app.ai.context_builder import GLOBAL_SUMMARY_SYSTEM_PROMPT, build_daily_report_evidence_pack, build_global_context
+from app.ai.anthropic_provider import AnthropicProvider
+from app.ai.context_builder import (
+    GLOBAL_SUMMARY_SYSTEM_PROMPT,
+    REPORT_TOPIC_KEYWORDS,
+    build_daily_report_evidence_pack,
+    build_global_context,
+)
 from app.ai.external_context import external_context_builder
 from app.ai.fallback import fallback_global_summary
 from app.ai.gemini_provider import GeminiProvider
@@ -25,6 +31,17 @@ from app.config.settings import get_settings
 from app.dependencies import get_db
 from app.knowledge.source_extractor import source_extractor
 from app.wechat_sender.automator import WeChatAutomator
+
+
+DAILY_REPORT_REQUIRED_HEADINGS = (
+    "主题归纳",
+    "决策、承诺和待办",
+    "待办和需要回复",
+    "风险和机会",
+    "关系和情绪信号",
+    "可检索关键词",
+    "明天建议关注",
+)
 
 
 @dataclass
@@ -138,9 +155,9 @@ class DailySummaryScheduler:
         )
         return DailySummaryConfig(
             enabled=str(enabled_raw).strip().lower() in {"1", "true", "yes", "on", "开启", "开"},
-            receiver=(receiver or self.settings.DAILY_SUMMARY_RECEIVER).strip() or "文件传输助手",
+            receiver=(receiver or self.settings.DAILY_SUMMARY_RECEIVER).strip() or "WeixinClawBot",
             time=self._normalize_time(time_value),
-            hours=self._parse_int(hours_raw, self.settings.DAILY_SUMMARY_HOURS, minimum=1, maximum=720),
+            hours=self._parse_int(hours_raw, self.settings.DAILY_SUMMARY_HOURS, minimum=0, maximum=720),
             max_messages=self._parse_int(
                 max_messages_raw,
                 self.settings.DAILY_SUMMARY_MAX_MESSAGES,
@@ -165,7 +182,7 @@ class DailySummaryScheduler:
         if time_value is not None and time_value.strip():
             await db.set_setting("daily_summary.time", self._normalize_time(time_value), "Daily summary time")
         if hours is not None:
-            safe_hours = self._parse_int(str(hours), 24, minimum=1, maximum=720)
+            safe_hours = self._parse_int(str(hours), self.settings.DAILY_SUMMARY_HOURS, minimum=0, maximum=720)
             await db.set_setting("daily_summary.hours", str(safe_hours), "Daily summary hours")
         config = await self.get_config()
         self._refresh_next_run_at(config)
@@ -186,6 +203,7 @@ class DailySummaryScheduler:
                 send_result = await asyncio.to_thread(self._send_summary, config.receiver, text, html_path, share_url)
                 sent = bool(send_result.get("sent"))
                 self._last_status = "sent" if sent else "send_failed"
+                self._last_error = "" if sent else str(send_result.get("error") or "Daily summary delivery failed")
                 result = {
                     "status": self._last_status,
                     "reason": reason,
@@ -204,6 +222,7 @@ class DailySummaryScheduler:
                     "share_sent": bool(send_result.get("share_sent")),
                 }
                 await db.set_setting("daily_summary.last_status", self._last_status, "Daily summary last status")
+                await db.set_setting("daily_summary.last_error", self._last_error, "Daily summary last error")
                 await db.add_agent_audit("daily_summary_run", result)
                 return result
             except Exception as exc:  # noqa: BLE001
@@ -258,6 +277,20 @@ class DailySummaryScheduler:
                 await db.add_agent_audit("daily_summary_failed", result)
                 logger.exception(f"Daily summary share report failed: {exc}")
                 return result
+
+    async def latest_share_report(self, reason: str = "manual_retry") -> dict:
+        db = await get_db()
+        html_path = self.latest_summary_html_path()
+        share_url = await db.get_setting("daily_summary.latest_share_url", "")
+        if not html_path.exists() or not share_url:
+            return await self.create_share_report(reason=reason)
+        return {
+            "status": "ready",
+            "reason": reason,
+            "share_url": share_url,
+            "html_path": str(html_path),
+            "share_message": self._build_share_message("", share_url),
+        }
 
     async def _generate_summary_artifacts(
         self,
@@ -369,13 +402,13 @@ class DailySummaryScheduler:
         }
 
     def _daily_summary_transport_order(self) -> list[str]:
-        raw = self.settings.DAILY_SUMMARY_SEND_TRANSPORT_ORDER or "ui_auto,openclaw"
+        raw = self.settings.DAILY_SUMMARY_SEND_TRANSPORT_ORDER or "openclaw"
         order = []
         for item in raw.split(","):
             name = item.strip().lower().replace("-", "_")
             if name and name not in order:
                 order.append(name)
-        return order or ["ui_auto", "openclaw"]
+        return order or ["openclaw"]
 
     def _send_via_wechat_automator(self, receiver: str, text: str, share_url: str = "") -> dict:
         try:
@@ -443,7 +476,7 @@ class DailySummaryScheduler:
         lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
         title = self._clean_wechat_preview_line(lines[0].strip("# ").strip() if lines else "")
         if not title or self._looks_garbled_preview(title):
-            title = "最近24小时微信总结"
+            title = "全部已同步记录微信总结"
         preview: list[str] = []
         for line in lines[1:]:
             clean = self._clean_wechat_preview_line(line)
@@ -536,8 +569,8 @@ class DailySummaryScheduler:
         escaped_title = html.escape(title)
         escaped_text = html.escape(text or "")
         generated_at = html.escape(run_at.replace("T", " "))
-        hours = html.escape(str(config.hours))
-        max_messages = html.escape(str(config.max_messages))
+        range_label = html.escape(self._format_range_label(config.hours))
+        max_messages = html.escape("unlimited" if config.hours <= 0 else str(config.max_messages))
         return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -624,7 +657,7 @@ class DailySummaryScheduler:
       <h1>{escaped_title}</h1>
       <div class="meta">
         <span class="chip">generated {generated_at}</span>
-        <span class="chip">range {hours}h</span>
+        <span class="chip">range {range_label}</span>
         <span class="chip">max messages {max_messages}</span>
       </div>
     </header>
@@ -1223,17 +1256,38 @@ try {{
         config = config or await self.get_config()
         db = await get_db()
         hours = config.hours
-        messages = await db.get_all_recent_messages(
-            hours=hours,
-            limit=config.max_messages,
-        )
+        range_label = self._format_range_label(hours)
+        overview = None
+        context_limit_note = ""
+        if hours <= 0:
+            overview = await db.get_global_message_overview()
+            total_conversations = int((overview.get("totals") or {}).get("total_conversations") or 1)
+            per_talker_limit = max(20, min(160, config.max_messages // max(1, total_conversations)))
+            messages = await db.get_all_history_context_messages(
+                limit=config.max_messages,
+                per_talker_limit=per_talker_limit,
+            )
+            context_limit_note = self._build_full_history_overview_block(
+                overview,
+                sampled_messages=len(messages),
+                per_talker_limit=per_talker_limit,
+            )
+        else:
+            messages = await db.get_all_recent_messages(
+                hours=hours,
+                limit=config.max_messages,
+            )
         if not messages:
-            return f"最近 {hours} 小时没有同步到新的微信聊天记录。"
+            return f"{range_label}没有同步到微信聊天记录。"
 
         messages = await source_extractor.enrich_messages(db, messages, max_links=80, max_images=20)
-        provider = self._get_provider()
-        evidence_pack = build_daily_report_evidence_pack(messages)
-        context = build_global_context(messages, max_chars=145000)
+        evidence_pack = build_daily_report_evidence_pack(
+            messages,
+            max_chats=28,
+            max_examples_per_chat=10,
+            max_chars=45000,
+        )
+        context = build_global_context(messages, max_chars=25000)
         external_context = ""
         if self.settings.DAILY_SUMMARY_EXTERNAL_CONTEXT_ENABLED:
             try:
@@ -1245,7 +1299,8 @@ try {{
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"Daily summary external context failed: {exc}")
         user_msg = (
-            f"请生成最近 {hours} 小时所有微信聊天记录的 Plaud/NotebookLM 风格详细版日报。"
+            f"请生成{range_label}的 Plaud/NotebookLM 风格详细版日报。"
+            "如果提供了【全量库统计】，它是本次日报范围的权威数据；【日报证据包】和【原始聊天记录】是为控制上下文长度抽取的会话代表样本。"
             "这份日报会通过微信发一个预览和完整链接，所以完整报告可以写得很细；目标是让我不用翻聊天记录也能掌握重点。"
             "请优先使用【日报证据包】，再用原始聊天记录补充细节，最后结合外部背景做现实校准。"
             "请至少写 6000 个中文字符；如果消息很多，写 8000-12000 字符也可以。"
@@ -1259,12 +1314,16 @@ try {{
             "最后给出可检索索引，方便我后续继续问知识库。"
         )
         external_block = f"\n\n{external_context}" if external_context else ""
-        ai_messages = [{"role": "user", "content": f"{evidence_pack}\n\n【原始聊天记录】\n{context}{external_block}\n\n{user_msg}"}]
+        overview_block = f"{context_limit_note}\n\n" if context_limit_note else ""
+        ai_messages = [{"role": "user", "content": f"{overview_block}{evidence_pack}\n\n【原始聊天记录】\n{context}{external_block}\n\n{user_msg}"}]
         try:
-            summary = await provider.chat(ai_messages, system_prompt=GLOBAL_SUMMARY_SYSTEM_PROMPT)
+            summary = await self._chat_with_provider_fallback(
+                ai_messages,
+                system_prompt=GLOBAL_SUMMARY_SYSTEM_PROMPT,
+            )
             if len(summary.strip()) < 5500 and len(messages) > 500:
                 expand_msg = (
-                    f"{evidence_pack}\n\n【原始聊天记录】\n{context}{external_block}\n\n"
+                    f"{overview_block}{evidence_pack}{external_block}\n\n"
                     "下面是刚生成的日报，但太短，不够详细：\n"
                     f"{summary}\n\n"
                     "请基于同一批聊天记录重写为更详细的微信日报。要求："
@@ -1276,20 +1335,186 @@ try {{
                     "6. 链接/图片解析必须结合进相关主题；"
                     "7. 不要说空话，不要只概括主题。"
                 )
-                summary = await provider.chat(
-                    [{"role": "user", "content": expand_msg}],
-                    system_prompt=GLOBAL_SUMMARY_SYSTEM_PROMPT,
-                )
+                try:
+                    expanded = await self._chat_with_provider_fallback(
+                        [{"role": "user", "content": expand_msg}],
+                        system_prompt=GLOBAL_SUMMARY_SYSTEM_PROMPT,
+                    )
+                    if len(expanded.strip()) > len(summary.strip()):
+                        summary = expanded
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"Daily summary expansion failed; keeping first draft: {exc}")
+            summary = await self._complete_missing_daily_sections(
+                summary,
+                evidence_pack=evidence_pack,
+                external_context=external_context,
+                messages=messages,
+            )
             if len(summary.strip()) < 5500 and len(messages) > 500:
-                summary = summary.strip() + "\n\n" + self._local_detail_appendix(messages)
+                summary = summary.strip() + "\n\n" + self._local_detail_appendix(messages, max_chats=16)
+            elif len(messages) > 500 and "## 更多会话线索（本地记录补充）" not in summary:
+                summary = summary.strip() + "\n\n" + self._local_detail_appendix(messages, max_chats=16)
             summary = self._append_required_daily_notes(summary, messages)
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Daily summary AI generation failed: {exc}")
             summary = fallback_global_summary(messages, hours, exc)
+            if context_limit_note:
+                summary = f"{context_limit_note}\n\n{summary}"
+            if len(messages) > 500:
+                summary += "\n\n" + self._local_detail_appendix(messages, max_chats=20)
+            missing = self._missing_daily_sections(summary)
+            if missing:
+                summary += "\n\n" + self._local_required_sections(messages, missing)
+            summary = self._append_required_daily_notes(summary, messages)
 
-        header = f"每日微信总结｜最近 {hours} 小时"
+        header = f"每日微信总结｜{range_label}"
         body = summary.strip() or "今天没有生成有效总结。"
         return f"{header}\n\n{body}"
+
+    def _format_range_label(self, hours: int) -> str:
+        return "全部已同步聊天记录" if hours <= 0 else f"最近 {hours} 小时"
+
+    def _missing_daily_sections(self, summary: str) -> list[str]:
+        return [
+            heading
+            for heading in DAILY_REPORT_REQUIRED_HEADINGS
+            if not re.search(rf"(?m)^##\s+{re.escape(heading)}(?:\s|$)", summary or "")
+        ]
+
+    async def _complete_missing_daily_sections(
+        self,
+        summary: str,
+        *,
+        evidence_pack: str,
+        external_context: str,
+        messages: list[dict],
+    ) -> str:
+        missing = self._missing_daily_sections(summary)
+        if not missing:
+            return summary.strip()
+
+        requested = "、".join(missing)
+        prompt = (
+            f"{evidence_pack}\n\n"
+            f"【外部背景】\n{external_context[:12000] or '无可用外部背景'}\n\n"
+            f"现有日报缺少以下章节：{requested}。"
+            "只补写这些缺失章节，每个章节必须使用完全一致的二级 Markdown 标题。"
+            "内容必须基于证据包，写具体群名/联系人、时间、事实与下一步；不要复述已经完成的重点对话详解。"
+            "总计写 2500-5000 个中文字符，优先保证所有指定章节完整结束。"
+        )
+        system_prompt = (
+            "你是微信情报日报的续写编辑。只输出用户指定的缺失章节，不输出前言，"
+            "不编造，不省略指定标题；外部信息必须标注为外部背景。"
+        )
+        try:
+            addition = await self._chat_with_provider_fallback(
+                [{"role": "user", "content": prompt}],
+                system_prompt=system_prompt,
+            )
+            if addition.strip():
+                summary = summary.rstrip() + "\n\n" + addition.strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Daily summary missing-section completion failed: {exc}")
+
+        missing = self._missing_daily_sections(summary)
+        if missing:
+            summary = summary.rstrip() + "\n\n" + self._local_required_sections(messages, missing)
+        return summary
+
+    def _local_required_sections(self, messages: list[dict], headings: list[str]) -> str:
+        ordered = sorted(messages, key=lambda item: int(item.get("create_time") or 0), reverse=True)
+        content_rows = [
+            (item, " ".join(str(item.get("content") or item.get("display_content") or "").split()))
+            for item in ordered
+        ]
+
+        def evidence_lines(terms: tuple[str, ...], limit: int = 6) -> list[str]:
+            found: list[str] = []
+            seen: set[int] = set()
+            lowered_terms = tuple(term.lower() for term in terms)
+            for item, content in content_rows:
+                message_id = int(item.get("id") or 0)
+                if not content or message_id in seen or not any(term in content.lower() for term in lowered_terms):
+                    continue
+                seen.add(message_id)
+                name = item.get("remark") or item.get("nickname") or item.get("talker") or "未知会话"
+                speaker = "我" if item.get("is_sender") else (item.get("sender") or name)
+                excerpt = content[:140] + ("..." if len(content) > 140 else "")
+                found.append(f"- {self._fmt_msg_time(item.get('create_time'))}｜{name}｜{speaker}：{excerpt}")
+                if len(found) >= limit:
+                    break
+            return found
+
+        groups: dict[str, int] = {}
+        for item, _content in content_rows:
+            name = item.get("remark") or item.get("nickname") or item.get("talker") or "未知会话"
+            groups[str(name)] = groups.get(str(name), 0) + 1
+        active_names = [name for name, _count in sorted(groups.items(), key=lambda row: row[1], reverse=True)[:12]]
+
+        sections: list[str] = []
+        for heading in headings:
+            sections.append(f"## {heading}")
+            if heading == "主题归纳":
+                ranked_topics = []
+                for topic, terms in REPORT_TOPIC_KEYWORDS.items():
+                    lowered_terms = tuple(term.lower() for term in terms)
+                    count = sum(any(term in content.lower() for term in lowered_terms) for _item, content in content_rows)
+                    if count:
+                        ranked_topics.append((topic, count))
+                for topic, count in sorted(ranked_topics, key=lambda row: row[1], reverse=True)[:8]:
+                    sections.append(f"- {topic}：代表样本中命中 {count} 条，需结合对应会话证据判断，不按消息量直接等同重要性。")
+            elif heading in {"决策、承诺和待办", "待办和需要回复"}:
+                lines = evidence_lines(("决定", "确认", "安排", "需要", "记得", "回复", "跟进", "明天", "今晚"))
+                sections.extend(lines or ["- 暂未从代表样本中识别出可确认的明确承诺；建议结合原会话复核。"])
+            elif heading == "风险和机会":
+                lines = evidence_lines(("风险", "失败", "失效", "报错", "亏", "投资", "股票", "基金", "机会", "投诉"))
+                sections.extend(lines or ["- 暂未从代表样本中识别出明确高风险事件；外部信息仍需独立核验。"])
+            elif heading == "关系和情绪信号":
+                lines = evidence_lines(("焦虑", "担心", "生气", "感谢", "抱歉", "辛苦", "开心", "难", "累"))
+                sections.extend(lines or ["- 暂无足够证据判断明显关系或情绪变化。"])
+            elif heading == "可检索关键词":
+                topic_names = list(REPORT_TOPIC_KEYWORDS.keys())
+                sections.append("- " + "；".join((topic_names + active_names)[:24]))
+            elif heading == "明天建议关注":
+                sections.extend([
+                    "- 优先回看上面待办/风险证据对应的原会话，确认是否需要回复或设定截止时间。",
+                    "- 对投资、法律、产品发布与外部链接信息，用官方公告或原始页面二次核验后再行动。",
+                    "- 对未成功解析的图片或链接，可在知识库更新后重新检索，不依据占位文字做判断。",
+                ])
+            sections.append("")
+        return "\n".join(sections).strip()
+
+    def _build_full_history_overview_block(self, overview: dict, *, sampled_messages: int, per_talker_limit: int) -> str:
+        totals = overview.get("totals") or {}
+        total_messages = int(totals.get("total_messages") or 0)
+        total_conversations = int(totals.get("total_conversations") or 0)
+        first_date = totals.get("first_date") or "未知"
+        last_date = totals.get("last_date") or "未知"
+        top_conversations = overview.get("top_conversations") or []
+        date_counts = overview.get("date_counts") or []
+
+        lines = [
+            "## 全量库统计",
+            f"- 全量范围：{first_date} 至 {last_date}",
+            f"- 全量规模：{total_conversations} 个会话、{total_messages} 条消息",
+            f"- AI 详细上下文：覆盖所有会话，每个会话最多取最近 {per_talker_limit} 条，实际抽取 {sampled_messages} 条代表消息",
+        ]
+        if top_conversations:
+            lines.append("- 全量高频会话：" + "；".join(
+                f"{item.get('remark') or item.get('nickname') or item.get('talker')}: {item.get('msg_count')} 条"
+                for item in top_conversations[:12]
+            ))
+        if date_counts:
+            date_window = (
+                date_counts
+                if len(date_counts) <= 10
+                else date_counts[:5] + [{"date": "...", "count": "..."}] + date_counts[-5:]
+            )
+            lines.append("- 日期分布：" + "；".join(
+                f"{item.get('date')}: {item.get('count')} 条"
+                for item in date_window
+            ))
+        return "\n".join(lines)
 
     def _append_required_daily_notes(self, summary: str, messages: list[dict]) -> str:
         text = summary.strip()
@@ -1344,10 +1569,31 @@ try {{
             return ""
 
     def _get_provider(self) -> AIProvider:
-        settings = get_settings()
-        if settings.AI_PROVIDER == "openai":
+        if self.settings.AI_PROVIDER.lower() == "openai":
             return OpenAIProvider()
         return GeminiProvider()
+
+    def _provider_chain(self) -> list[AIProvider]:
+        providers: list[AIProvider] = [self._get_provider()]
+        if self.settings.ANTHROPIC_API_KEY and self.settings.ANTHROPIC_BASE_URL:
+            providers.append(AnthropicProvider())
+        return providers
+
+    async def _chat_with_provider_fallback(self, messages: list[dict], *, system_prompt: str) -> str:
+        errors: list[str] = []
+        for provider in self._provider_chain():
+            provider_name = provider.__class__.__name__
+            try:
+                text = (await provider.chat(messages, system_prompt=system_prompt)).strip()
+                if text:
+                    if errors:
+                        logger.info(f"Daily summary model fallback succeeded with {provider_name}")
+                    return text
+                errors.append(f"{provider_name}: empty response")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{provider_name}: {exc}")
+                logger.warning(f"Daily summary provider {provider_name} failed: {exc}")
+        raise RuntimeError("; ".join(errors) or "No daily summary model provider is configured")
 
     def _next_run_time(self, now: datetime, time_value: str) -> datetime:
         hour, minute = self._parse_time(time_value)

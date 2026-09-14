@@ -62,7 +62,7 @@ def collect_backend_routes() -> set[tuple[str, str]]:
             prefix = router_prefixes.get(router_name)
             if prefix is None:
                 continue
-            base = "" if router_name == "open_router" else "/api"
+            base = "" if router_name == "open_router" or path.name in {"share.py", "relay.py"} else "/api"
             routes.add(route_key(method, f"{base}{prefix}{suffix}"))
     main_text = BACKEND_MAIN.read_text(encoding="utf-8")
     for _quote, path in WEBSOCKET_ROUTE_RE.findall(main_text):

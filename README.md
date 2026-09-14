@@ -7,7 +7,12 @@ AI 增强的微信桌面客户端。左侧实时显示微信对话，右侧集�
 - **实时消息同步** — 每 7 秒自动同步微信消息，WebSocket 推送更新
 - **完整消息渲染** — 文本、图片、表情包、链接卡片、语音、视频、名片等
 - **AI 助手面板** — 分析对话、生成回复建议、总结对话内容
-- **多 AI 引擎** — 支持 Gemini、OpenAI、DeepSeek、本地模型 (Ollama/LM Studio)
+- **智能 Agent** — 由 WeChatAI 负责意图识别、Claude 对话、聊天记录检索和受控开发动作
+- **RAG 知识库** — 自动整理全部已同步记录，支持 embedding 语义检索、链接正文和图片 OCR/理解
+- **详细日报** — Plaud/NotebookLM 风格全量或时间范围报告，包含证据、待办、风险和外部背景校准
+- **多 AI 引擎** — 支持 Anthropic、Gemini、OpenAI 兼容网关和本地模型 (Ollama/LM Studio)
+- **受控开放 API** — 其他项目可通过 API Key 访问 Agent、记录、知识库和项目状态，支持 Tailscale
+- **微信入口** — OpenClaw 只承担 WeixinClawBot 收发，推理与工具执行仍由本项目 Agent 完成
 - **时间轴** — 日历跳转 + 侧边时间轴滑块，快速定位历史消息
 - **发送消息** — 通过 UI 自动化操作微信窗口发送消息
 - **历史会话** — AI 对话记录持久化保存，切换对话自动加载历史
@@ -53,6 +58,8 @@ cp .env.example .env
 必填项：
 - `GEMINI_API_KEY` — 使用 Gemini 时填写 ([获取](https://aistudio.google.com/apikey))
 - 或 `OPENAI_API_KEY` + `OPENAI_BASE_URL` — 使用 OpenAI/DeepSeek 时填写
+- `ANTHROPIC_API_KEY` + `ANTHROPIC_BASE_URL` — 启用 Claude Agent 和日报模型兜底时填写
+- `VOYAGE_API_KEY` — 启用 Voyage embedding 语义检索时填写
 
 同时将 `.env` 复制到 `backend/` 目录：
 ```bash
@@ -99,6 +106,16 @@ Windows:
 ```bash
 start.bat
 ```
+
+开发机需要强制清理旧进程并重启前后端时：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart_services.ps1
+```
+
+`start.bat` 会自动检查 OpenClaw 直连配置与本地网关。微信授权出现
+`ret=-2` 或 `prepare failed` 时，需要运行 `openclaw channels login --channel openclaw-weixin`
+并由账号本人重新扫码。详见 [OpenClaw 直连说明](docs/OPENCLAW_DIRECT_RELAY.md)。
 
 ## 验证与回归测试
 
@@ -207,6 +224,12 @@ WeChatai/
 | `GET /api/media/image/{local_id}` | 获取图片 |
 | `POST /api/send/text` | 发送微信消息 |
 | `GET /api/sync/status` | 同步状态 |
+| `GET /api/knowledge/status` | 知识库与 embedding 状态 |
+| `POST /api/knowledge/search` | 本机 RAG 检索 |
+| `POST /relay/v1/messages` | OpenClaw 本机直连 Agent relay |
+
+外部项目不要调用本机内部 `/api/*` 或 `/relay/*`，应使用带权限 API Key 的
+`/open/v1/*`。完整端点、权限和 Tailscale 示例见 [开放 API 文档](docs/OPEN_API.md)。
 
 ## 配置说明
 
@@ -217,6 +240,10 @@ WeChatai/
 | `OPENAI_API_KEY` | - | OpenAI/兼容 API Key |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API 地址（DeepSeek: `https://api.deepseek.com`） |
 | `OPENAI_MODEL` | `gpt-4o` | 模型名称 |
+| `ANTHROPIC_API_KEY` | - | Claude Messages API Key |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | Anthropic 或兼容 Messages API 地址 |
+| `VOYAGE_API_KEY` | - | Voyage embedding API Key |
+| `DAILY_SUMMARY_HOURS` | `0` | 日报范围；`0` 表示全部已同步记录 |
 | `SYNC_INTERVAL_SECONDS` | `7` | 消息同步间隔 |
 | `APP_PORT` | `8090` | 后端端口 |
 | `INFERENCE_PORT` | `8091` | 本地分身模型推理服务端口 |
@@ -226,4 +253,5 @@ WeChatai/
 - 本项目仅用于**个人学习和研究**目的
 - 微信数据解密使用 [wdecipher](https://github.com/gndlwch2w/wdecipher) 库
 - 消息发送通过 PyAutoGUI 操控微信窗口，发送时微信窗口会短暂弹出
-- 所有数据存储在本地 SQLite 数据库，不会上传到任何服务器
+- 原始数据库、索引和报告存储在本机；启用云端 AI、embedding、图片理解或链接抓取时，完成该功能所需的文本、图片或 URL 会发送到你配置的服务商
+- `/api/*` 与 `/relay/*` 默认仅允许本机访问；Tailscale 或其他项目必须使用 `/open/v1/*` 和最小权限 API Key

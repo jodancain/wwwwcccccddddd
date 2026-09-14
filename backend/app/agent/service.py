@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import re
+import socket
 import time
 
 from loguru import logger
@@ -46,15 +47,19 @@ class WechatAgentService:
             "agent.dev_workspace",
             self.settings.AGENT_DEV_WORKSPACE or str(Path.cwd()),
         )
+        model_ready = bool(self.settings.ANTHROPIC_API_KEY) or bool(self.settings.OPENAI_API_KEY)
+        openclaw_gateway_ready = await asyncio.to_thread(self._openclaw_gateway_reachable)
         return {
             "enabled": enabled,
             "entry_name": entry_name,
             "entry_talker": entry_talker,
             "bound": bool(entry_talker),
-            "transport_mode": "local_polling" if entry_talker else "openclaw_forward",
-            "openclaw_forward_ready": enabled and (
-                bool(self.settings.ANTHROPIC_API_KEY) or bool(self.settings.OPENAI_API_KEY)
-            ),
+            "transport_mode": "local_polling" if entry_talker else "openclaw_direct_relay",
+            "agent_execution_owner": "wechatai",
+            "local_relay_url": "http://127.0.0.1:8090/relay/v1/messages",
+            "openclaw_forward_ready": enabled and model_ready and openclaw_gateway_ready,
+            "openclaw_gateway_ready": openclaw_gateway_ready,
+            "agent_model_ready": model_ready,
             "local_polling_ready": bool(entry_talker),
             "permission_mode": self.settings.AGENT_PERMISSION_MODE,
             "ai_provider": self.settings.AI_PROVIDER,
@@ -87,6 +92,14 @@ class WechatAgentService:
             "daily_summary": await daily_summary_scheduler.status(),
             "pending_actions": pending,
         }
+
+    @staticmethod
+    def _openclaw_gateway_reachable(host: str = "127.0.0.1", port: int = 18789) -> bool:
+        try:
+            with socket.create_connection((host, port), timeout=0.4):
+                return True
+        except OSError:
+            return False
 
     async def is_enabled(self) -> bool:
         db = await get_db()
@@ -339,13 +352,28 @@ class WechatAgentService:
 
     async def _handle_daily_summary_control(self, text: str) -> dict | None:
         compact = re.sub(r"\s+", "", text)
-        if not any(word in compact for word in ("总结", "重点", "日报", "复盘")):
-            return None
-        if not any(word in compact for word in ("每天", "每日", "定时", "自动", "现在", "立即", "发一次", "状态", "开启", "关闭", "取消", "停止", "预览")):
-            return None
+        retry_latest = any(
+            word in compact
+            for word in ("没收到", "没有收到", "怎么没有", "再发", "重发", "再来一次", "再发一下链接")
+        )
+        if not retry_latest:
+            if not any(word in compact for word in ("总结", "重点", "日报", "复盘")):
+                return None
+            if not any(word in compact for word in ("每天", "每日", "定时", "自动", "现在", "立即", "发一次", "状态", "开启", "关闭", "取消", "停止", "预览")):
+                return None
 
         time_value = self._extract_daily_summary_time(text)
         hours = self._extract_daily_summary_hours(text)
+
+        if retry_latest:
+            result = await daily_summary_scheduler.latest_share_report(reason="wechat_agent_retry_latest")
+            reply = result.get("share_message") or f"最新日报链接获取失败：{result.get('error') or '未知错误'}"
+            return {
+                "status": result.get("status", "ok"),
+                "reply": reply,
+                "agent_route": {"route": "daily_summary", "confidence": 1.0, "reason": "retry latest daily summary", "method": "local"},
+                "daily_summary_result": result,
+            }
 
         if any(word in compact for word in ("关闭", "停止", "取消", "别发", "不要发")):
             status = await daily_summary_scheduler.configure(enabled=False)
@@ -359,11 +387,14 @@ class WechatAgentService:
         if any(word in compact for word in ("状态", "设置", "开了吗", "开启了吗")) and not any(word in compact for word in ("开启", "打开", "启用")):
             status = await daily_summary_scheduler.status()
             enabled = "开启" if status.get("enabled") else "关闭"
+            range_label = self._format_daily_summary_range(status.get("hours"))
             reply = (
                 f"每日微信总结当前：{enabled}\n"
                 f"时间：{status.get('time')}\n"
                 f"接收人：{status.get('receiver')}\n"
-                f"范围：最近 {status.get('hours')} 小时\n"
+                f"范围：{range_label}\n"
+                f"上次结果：{status.get('last_status') or '暂无'}\n"
+                f"上次错误：{status.get('last_error') or '无'}\n"
                 f"下次运行：{status.get('next_run_at') or '未安排'}"
             )
             return {
@@ -401,11 +432,12 @@ class WechatAgentService:
                 time_value=time_value,
                 hours=hours,
             )
+            range_label = self._format_daily_summary_range(status.get("hours"))
             reply = (
                 "已开启每日微信总结自动发送。\n"
                 f"时间：{status.get('time')}\n"
                 f"接收人：{status.get('receiver')}\n"
-                f"范围：最近 {status.get('hours')} 小时\n"
+                f"范围：{range_label}\n"
                 "你也可以说：现在发一次每日总结 / 关闭每日总结 / 每日总结状态。"
             )
             return {
@@ -416,6 +448,13 @@ class WechatAgentService:
             }
 
         return None
+
+    def _format_daily_summary_range(self, hours: object) -> str:
+        try:
+            value = int(hours or 0)
+        except (TypeError, ValueError):
+            value = 0
+        return "全部已同步聊天记录" if value <= 0 else f"最近 {value} 小时"
 
     def _extract_daily_summary_time(self, text: str) -> str | None:
         match = re.search(r"(\d{1,2})\s*[:：]\s*(\d{1,2})", text)
@@ -432,6 +471,8 @@ class WechatAgentService:
         return None
 
     def _extract_daily_summary_hours(self, text: str) -> int | None:
+        if any(word in text for word in ("全部", "所有", "全量", "全库", "历史", "以前")):
+            return 0
         match = re.search(r"最近\s*(\d{1,3})\s*(小时|天)", text)
         if not match:
             return None
