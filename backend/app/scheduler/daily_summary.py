@@ -900,7 +900,8 @@ try {{
     response = {{ raw }};
   }}
   console.log(JSON.stringify({{
-    ok: response.ret === 0 && (response.errcode === undefined || response.errcode === 0),
+    ok: (response.ret === undefined || response.ret === 0) &&
+      (response.errcode === undefined || response.errcode === 0),
     clientId,
     fileName,
     fileSize: uploaded.fileSize,
@@ -1042,7 +1043,8 @@ try {{
     response = {{ raw }};
   }}
   console.log(JSON.stringify({{
-    ok: response.ret === 0 && (response.errcode === undefined || response.errcode === 0),
+    ok: (response.ret === undefined || response.ret === 0) &&
+      (response.errcode === undefined || response.errcode === 0),
     clientId: body.msg.client_id,
     ret: response.ret,
     errcode: response.errcode,
