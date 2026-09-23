@@ -202,6 +202,10 @@ class WechatAgentService:
         if health_result:
             return health_result
 
+        connectivity_result = await self._handle_connectivity_test(text)
+        if connectivity_result:
+            return connectivity_result
+
         route = await self._decide_route_with_dialog_memory(db, text)
         if route.route == ROUTE_DEVELOPMENT:
             agent = DevAgent(db)
@@ -348,6 +352,41 @@ class WechatAgentService:
             "status": "ok",
             "reply": reply,
             "agent_route": {"route": "health", "confidence": 1.0, "reason": "agent health/status question", "method": "local"},
+        }
+
+    @staticmethod
+    def _is_connectivity_test(text: str) -> bool:
+        compact = re.sub(r"\s+", "", text.lower()).strip("。.!！?？")
+        return bool(
+            re.fullmatch(r"(?:迁移|连接|收发|回复|通道|服务)?测试(?:一下)?", compact)
+            or compact in {"ping", "test"}
+        )
+
+    async def _handle_connectivity_test(self, text: str) -> dict | None:
+        if not self._is_connectivity_test(text):
+            return None
+        status = await self.status()
+        forward_ready = bool(status.get("openclaw_forward_ready"))
+        gateway_ready = bool(status.get("openclaw_gateway_ready"))
+        model_ready = bool(status.get("agent_model_ready"))
+        all_ready = forward_ready and gateway_ready and model_ready
+        reply = (
+            f"迁移测试{'成功' if all_ready else '已收到'}。\n"
+            "- 微信消息已到达 WeChatAI Agent\n"
+            f"- OpenClaw 转发：{'正常' if forward_ready else '异常'}\n"
+            f"- OpenClaw Gateway：{'正常' if gateway_ready else '异常'}\n"
+            f"- Agent 配置：{'就绪' if model_ready else '未就绪'}\n"
+            "- 微信聊天数据：已切换到 D 盘目录"
+        )
+        return {
+            "status": "ok",
+            "reply": reply,
+            "agent_route": {
+                "route": "connectivity_test",
+                "confidence": 1.0,
+                "reason": "local end-to-end connectivity test",
+                "method": "local",
+            },
         }
 
     async def _handle_daily_summary_control(self, text: str) -> dict | None:

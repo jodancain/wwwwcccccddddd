@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Any, AsyncIterator
 
@@ -44,6 +45,21 @@ def _latest_user_text(messages: list[dict[str, Any]]) -> str:
         if text:
             return text
     return ""
+
+
+_OPENCLAW_CONTEXT_PREFIX = re.compile(
+    r"^\s*(?:\[[^\]\r\n]{1,160}\]\s*)?"
+    r"Conversation info \(untrusted metadata\):\s*"
+    r"```(?:json)?\s*.*?\s*```\s*",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+
+
+def _clean_relay_user_text(text: str) -> str:
+    """Remove OpenClaw's transport envelope before intent routing."""
+    original = text.strip()
+    cleaned = _OPENCLAW_CONTEXT_PREFIX.sub("", original, count=1).strip()
+    return cleaned or original
 
 
 def _usage(text: str) -> dict[str, int]:
@@ -107,7 +123,7 @@ async def relay_models() -> dict[str, Any]:
 
 @router.post("/messages")
 async def relay_messages(req: RelayMessagesRequest):
-    user_text = _latest_user_text(req.messages)
+    user_text = _clean_relay_user_text(_latest_user_text(req.messages))
     if not user_text:
         raise HTTPException(status_code=400, detail="No user text was found in messages")
 

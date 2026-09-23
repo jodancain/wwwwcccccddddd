@@ -15,7 +15,12 @@ class OpenAIProvider(AIProvider):
 
     def _get_client(self):
         from openai import AsyncOpenAI
-        return AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+        return AsyncOpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=25.0,
+            max_retries=0,
+        )
 
     def _build_messages(self, messages: list[dict], system_prompt: str = "") -> list[dict]:
         result = []
