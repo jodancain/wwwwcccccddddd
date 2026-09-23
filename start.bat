@@ -62,27 +62,15 @@ if not exist "frontend\node_modules" (
     echo.
 )
 
-:: Ensure the OpenClaw Weixin gateway is available for inbound forwarding
-:: and proactive daily-summary delivery. A disabled scheduled task is common
-:: on Windows, so the helper can launch the existing gateway.cmd directly.
-echo [INFO] 配置 OpenClaw 仅转发到 WeChatAI Agent...
-powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\configure_openclaw_direct_relay.ps1"
-if errorlevel 1 (
-    echo [WARN] OpenClaw 直连 Agent 配置未完成；请检查 OpenClaw CLI。
-)
-
-echo [INFO] 检查 OpenClaw 微信网关...
-powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\ensure_openclaw_gateway.ps1"
-if errorlevel 1 (
-    echo [WARN] OpenClaw 网关未就绪；网页仍会启动，但微信收发暂不可用。
-)
-echo.
-
 :: Check if frontend is built, if so use production mode
 if exist "frontend\dist\index.html" (
     echo [INFO] 检测到前端构建文件，使用生产模式
     echo [INFO] 启动后端...
     start "" /B /D "%BACKEND_DIR%" "%BACKEND_PYTHON%" run.py
+    timeout /t 3 /nobreak >nul
+    echo [INFO] 配置并启动 Hermes 微信 Agent...
+    powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\configure_hermes_weixin.ps1"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\ensure_hermes_gateway.ps1" -WorkingDirectory "%PROJECT_DIR%"
     echo.
     echo ==========================================
     echo    WeChatAI 已启动!
@@ -101,6 +89,10 @@ if exist "frontend\dist\index.html" (
 
     :: Wait for backend
     timeout /t 3 /nobreak >nul
+
+    echo [INFO] 配置并启动 Hermes 微信 Agent...
+    powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\configure_hermes_weixin.ps1"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\ensure_hermes_gateway.ps1" -WorkingDirectory "%PROJECT_DIR%"
 
     :: Start frontend
     echo [2/2] 启动前端 (端口 5175)...

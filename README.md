@@ -7,12 +7,12 @@ AI 增强的微信桌面客户端。左侧实时显示微信对话，右侧集�
 - **实时消息同步** — 每 7 秒自动同步微信消息，WebSocket 推送更新
 - **完整消息渲染** — 文本、图片、表情包、链接卡片、语音、视频、名片等
 - **AI 助手面板** — 分析对话、生成回复建议、总结对话内容
-- **智能 Agent** — 由 WeChatAI 负责意图识别、Claude 对话、聊天记录检索和受控开发动作
+- **智能 Agent** — Hermes 负责意图识别、Claude 对话、工具执行和受控开发动作
 - **RAG 知识库** — 自动整理全部已同步记录，支持 embedding 语义检索、链接正文和图片 OCR/理解
 - **详细日报** — Plaud/NotebookLM 风格全量或时间范围报告，包含证据、待办、风险和外部背景校准
 - **多 AI 引擎** — 支持 Anthropic、Gemini、OpenAI 兼容网关和本地模型 (Ollama/LM Studio)
 - **受控开放 API** — 其他项目可通过 API Key 访问 Agent、记录、知识库和项目状态，支持 Tailscale
-- **微信入口** — OpenClaw 只承担 WeixinClawBot 收发，推理与工具执行仍由本项目 Agent 完成
+- **微信入口** — Hermes 原生连接 WeixinClawBot，并通过 MCP 使用本项目的记录与知识库
 - **时间轴** — 日历跳转 + 侧边时间轴滑块，快速定位历史消息
 - **发送消息** — 通过 UI 自动化操作微信窗口发送消息
 - **历史会话** — AI 对话记录持久化保存，切换对话自动加载历史
@@ -113,9 +113,9 @@ start.bat
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart_services.ps1
 ```
 
-`start.bat` 会自动检查 OpenClaw 直连配置与本地网关。微信授权出现
-`ret=-2` 或 `prepare failed` 时，需要运行 `openclaw channels login --channel openclaw-weixin`
-并由账号本人重新扫码。详见 [OpenClaw 直连说明](docs/OPENCLAW_DIRECT_RELAY.md)。
+`start.bat` 会自动检查 Hermes 配置与微信网关。首次切换会迁移现有 iLink
+账号、上下文和同步游标；需要重新授权时运行 `hermes gateway setup` 并扫码。
+详见 [Hermes 微信 Agent 说明](docs/HERMES_WEIXIN.md)。
 
 ## 验证与回归测试
 
@@ -226,7 +226,7 @@ WeChatai/
 | `GET /api/sync/status` | 同步状态 |
 | `GET /api/knowledge/status` | 知识库与 embedding 状态 |
 | `POST /api/knowledge/search` | 本机 RAG 检索 |
-| `POST /relay/v1/messages` | OpenClaw 本机直连 Agent relay |
+| `POST /relay/v1/messages` | 兼容旧客户端的本机 Agent relay |
 
 外部项目不要调用本机内部 `/api/*` 或 `/relay/*`，应使用带权限 API Key 的
 `/open/v1/*`。完整端点、权限和 Tailscale 示例见 [开放 API 文档](docs/OPEN_API.md)。

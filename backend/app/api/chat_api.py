@@ -404,7 +404,11 @@ async def open_project_status(
             "transport_mode": agent_status.get("transport_mode"),
             "router_mode": agent_status.get("router_mode"),
             "dev_agent_version": agent_status.get("dev_agent_version"),
-            "openclaw_forward_ready": agent_status.get("openclaw_forward_ready"),
+            "agent_execution_owner": agent_status.get("agent_execution_owner"),
+            "knowledge_owner": agent_status.get("knowledge_owner"),
+            "hermes_forward_ready": agent_status.get("hermes_forward_ready"),
+            "hermes_gateway_ready": agent_status.get("hermes_gateway_ready"),
+            "hermes_model_ready": agent_status.get("hermes_model_ready"),
         },
         "knowledge": {
             "chunks": knowledge_status.get("chunks"),
@@ -655,7 +659,7 @@ async def open_agent_chat(
     authorization: str = Header(None),
     api_key: str = Query(None),
 ):
-    """Chat with the same WeChatAI Agent used by the WeChat/OpenClaw entry."""
+    """Chat with the WeChatAI knowledge Agent exposed to Hermes and external clients."""
     api_record = await _verify_api_key(authorization, api_key, required_permission="agent:chat")
     if _is_confirm_or_cancel_text(req.message) and not _has_permission(api_record, "agent:confirm"):
         raise HTTPException(status_code=403, detail="API key missing permission: agent:confirm")

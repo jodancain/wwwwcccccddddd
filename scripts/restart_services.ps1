@@ -96,16 +96,6 @@ Stop-WeChatAIListener -Port $BackendPort -Kind "backend"
 Stop-WeChatAIListener -Port $FrontendPort -Kind "frontend"
 Start-Sleep -Seconds 1
 
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "configure_openclaw_direct_relay.ps1") `
-    -RelayBaseUrl "http://127.0.0.1:$BackendPort/relay/v1"
-if ($LASTEXITCODE -ne 0) {
-    throw "OpenClaw relay configuration failed with exit code $LASTEXITCODE"
-}
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "ensure_openclaw_gateway.ps1")
-if ($LASTEXITCODE -ne 0) {
-    throw "OpenClaw gateway did not become ready"
-}
-
 $dataDir = Get-BackendDataDirectory -BackendDirectory $backendDir
 $logDir = Join-Path $dataDir "service-logs"
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -134,6 +124,18 @@ if (-not $backendReady -or -not $frontendReady) {
     throw "WeChatAI restart incomplete: backend=$backendReady frontend=$frontendReady logs=$logDir"
 }
 
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "configure_hermes_weixin.ps1") `
+    -WeChatAIBaseUrl "http://127.0.0.1:$BackendPort"
+if ($LASTEXITCODE -ne 0) {
+    throw "Hermes Weixin configuration failed with exit code $LASTEXITCODE"
+}
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "ensure_hermes_gateway.ps1") `
+    -WorkingDirectory $projectRoot
+if ($LASTEXITCODE -ne 0) {
+    throw "Hermes gateway did not become ready"
+}
+
 Write-Host "WeChatAI restarted successfully."
 Write-Host "Frontend: http://127.0.0.1:$FrontendPort/"
 Write-Host "Backend:  http://127.0.0.1:$BackendPort/"
+Write-Host "Weixin:   Hermes gateway ready"

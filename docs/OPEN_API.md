@@ -189,35 +189,14 @@ curl http://<tailscale-hostname>:8090/open/v1/project/status \
 5. Give each external project its own API key so access can be rotated or
    revoked independently.
 
-## OpenClaw Weixin Access Boundary
+## Hermes Weixin Access Boundary
 
-OpenClaw is used only as a Weixin transport. Its local model provider forwards
-the latest user message to `/relay/v1/messages`; WeChatAI owns intent routing,
-Claude calls, RAG, development actions, and confirmations. Keep the project API
-behind `/open/v1/*`, and keep OpenClaw itself allowlisted so strangers or groups
-cannot drive the agent/tools.
+Hermes is the active Weixin Agent and connects to this API through a dedicated
+MCP bridge. The configured owner ID is allowlisted, group access is disabled,
+and the bridge receives its own `all`-scope API key. The key is stored only in
+the local Hermes `.env` and can be independently revoked.
 
-Recommended OpenClaw channel posture:
-
-```json
-{
-  "channels": {
-    "openclaw-weixin": {
-      "dmPolicy": "allowlist",
-      "allowFrom": ["<your-weixin-user-id>"],
-      "groupPolicy": "allowlist",
-      "groupAllowFrom": []
-    },
-    "telegram": {
-      "dmPolicy": "allowlist",
-      "allowFrom": [],
-      "groupPolicy": "allowlist",
-      "groupAllowFrom": []
-    }
-  }
-}
-```
-
-Run `scripts/configure_openclaw_direct_relay.ps1`, restart the gateway, and
-verify that `openclaw agent --message "每日总结状态" --json` reports provider
-`wechatai` and model `wechatai-direct-agent`.
+Hermes uses `/open/v1/*` for project status, raw records, RAG/embedding search,
+and knowledge maintenance. Local-only daily-report controls remain under
+`/api/agent/daily-summary/*` and are callable only by the MCP process on this
+machine. See [Hermes Weixin integration](HERMES_WEIXIN.md).

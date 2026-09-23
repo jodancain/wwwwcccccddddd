@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from pathlib import Path
 import re
-import socket
+import subprocess
 import time
 
 from loguru import logger
@@ -16,6 +18,38 @@ from app.config.settings import get_settings
 from app.dependencies import get_db
 from app.scheduler.daily_summary import daily_summary_scheduler
 from app.wechat_sender.automator import WeChatAutomator
+
+
+def _is_hermes_gateway_process(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        import psutil
+
+        process = psutil.Process(pid)
+        command_line = " ".join(process.cmdline()).lower()
+        return process.is_running() and "hermes" in command_line and "gateway" in command_line
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001
+        return False
+
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return False
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        except (AttributeError, OSError):
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
 
 
 class WechatAgentService:
@@ -47,19 +81,22 @@ class WechatAgentService:
             "agent.dev_workspace",
             self.settings.AGENT_DEV_WORKSPACE or str(Path.cwd()),
         )
-        model_ready = bool(self.settings.ANTHROPIC_API_KEY) or bool(self.settings.OPENAI_API_KEY)
-        openclaw_gateway_ready = await asyncio.to_thread(self._openclaw_gateway_reachable)
+        backend_model_ready = bool(self.settings.ANTHROPIC_API_KEY) or bool(self.settings.OPENAI_API_KEY)
+        hermes_gateway_ready = await asyncio.to_thread(self._hermes_gateway_reachable)
+        hermes_model_ready = await asyncio.to_thread(self._hermes_model_configured)
         return {
             "enabled": enabled,
             "entry_name": entry_name,
             "entry_talker": entry_talker,
-            "bound": bool(entry_talker),
-            "transport_mode": "local_polling" if entry_talker else "openclaw_direct_relay",
-            "agent_execution_owner": "wechatai",
-            "local_relay_url": "http://127.0.0.1:8090/relay/v1/messages",
-            "openclaw_forward_ready": enabled and model_ready and openclaw_gateway_ready,
-            "openclaw_gateway_ready": openclaw_gateway_ready,
-            "agent_model_ready": model_ready,
+            "bound": hermes_gateway_ready,
+            "transport_mode": "hermes_weixin",
+            "agent_execution_owner": "hermes",
+            "knowledge_owner": "wechatai",
+            "hermes_forward_ready": enabled and hermes_model_ready and hermes_gateway_ready,
+            "hermes_gateway_ready": hermes_gateway_ready,
+            "hermes_model_ready": hermes_model_ready,
+            "agent_model_ready": hermes_model_ready,
+            "backend_model_ready": backend_model_ready,
             "local_polling_ready": bool(entry_talker),
             "permission_mode": self.settings.AGENT_PERMISSION_MODE,
             "ai_provider": self.settings.AI_PROVIDER,
@@ -93,12 +130,62 @@ class WechatAgentService:
             "pending_actions": pending,
         }
 
-    @staticmethod
-    def _openclaw_gateway_reachable(host: str = "127.0.0.1", port: int = 18789) -> bool:
+    def _hermes_home(self) -> Path:
+        configured = self.settings.HERMES_HOME or os.getenv("HERMES_HOME", "")
+        if configured:
+            return Path(configured).expanduser().resolve()
+        return (Path.home() / "AppData" / "Local" / "hermes").resolve()
+
+    def _hermes_model_configured(self) -> bool:
+        env_path = self._hermes_home() / ".env"
         try:
-            with socket.create_connection((host, port), timeout=0.4):
-                return True
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                if line.strip().startswith("EZR_API_KEY=") and line.split("=", 1)[1].strip():
+                    return True
         except OSError:
+            pass
+        return False
+
+    def _hermes_gateway_reachable(self) -> bool:
+        hermes_home = self._hermes_home()
+
+        try:
+            state = json.loads((hermes_home / "gateway_state.json").read_text(encoding="utf-8"))
+            weixin_state = ((state.get("platforms") or {}).get("weixin") or {}).get("state")
+            if state.get("gateway_state") == "running" and weixin_state == "connected":
+                if _is_hermes_gateway_process(int(state.get("pid") or 0)):
+                    return True
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+
+        pid_file = Path(
+            self.settings.HERMES_GATEWAY_PID_FILE or (hermes_home / "gateway-wechatai.pid")
+        )
+        try:
+            pid = int(pid_file.read_text(encoding="utf-8").strip())
+            if _is_hermes_gateway_process(pid):
+                return True
+        except (OSError, ValueError):
+            pass
+
+        cli_path = Path(self.settings.HERMES_CLI_PATH or (hermes_home / "bin" / "hermes.exe"))
+        if not cli_path.exists():
+            return False
+        try:
+            completed = subprocess.run(
+                [str(cli_path), "gateway", "status"],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+                env={**os.environ, "HERMES_HOME": str(hermes_home)},
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            output = f"{completed.stdout}\n{completed.stderr}".lower()
+            return completed.returncode == 0 and "not running" not in output
+        except (OSError, subprocess.SubprocessError):
             return False
 
     async def is_enabled(self) -> bool:
@@ -342,8 +429,9 @@ class WechatAgentService:
         model = status.get("openai_model") if status.get("ai_provider") == "openai" else status.get("claude_model")
         reply = (
             "我这边服务是在线的。\n"
-            f"- 微信入口：{status.get('transport_mode')}，可用：{status.get('openclaw_forward_ready')}\n"
-            f"- 当前模型：{status.get('ai_provider')} / {model}\n"
+            f"- 微信入口：{status.get('transport_mode')}，可用：{status.get('hermes_forward_ready')}\n"
+            f"- 主对话 Agent：Hermes / {status.get('hermes_model_ready')}\n"
+            f"- WeChatAI 知识服务模型：{status.get('ai_provider')} / {model}\n"
             f"- 聊天记录同步：后端正常，最近每日总结状态：{daily.get('last_status') or '暂无'}\n\n"
             "刚才“为什么又用不了”这类话容易被当成开发修复任务；现在我会先按状态询问处理。"
             "普通聊天可以直接问，想强制普通对话也可以用 `/chat 你的问题`。"
@@ -366,16 +454,16 @@ class WechatAgentService:
         if not self._is_connectivity_test(text):
             return None
         status = await self.status()
-        forward_ready = bool(status.get("openclaw_forward_ready"))
-        gateway_ready = bool(status.get("openclaw_gateway_ready"))
+        forward_ready = bool(status.get("hermes_forward_ready"))
+        gateway_ready = bool(status.get("hermes_gateway_ready"))
         model_ready = bool(status.get("agent_model_ready"))
         all_ready = forward_ready and gateway_ready and model_ready
         reply = (
             f"迁移测试{'成功' if all_ready else '已收到'}。\n"
-            "- 微信消息已到达 WeChatAI Agent\n"
-            f"- OpenClaw 转发：{'正常' if forward_ready else '异常'}\n"
-            f"- OpenClaw Gateway：{'正常' if gateway_ready else '异常'}\n"
-            f"- Agent 配置：{'就绪' if model_ready else '未就绪'}\n"
+            "- 微信消息已到达 Hermes Agent\n"
+            f"- Hermes 微信通道：{'正常' if forward_ready else '异常'}\n"
+            f"- Hermes Gateway：{'正常' if gateway_ready else '异常'}\n"
+            f"- Hermes 模型：{'就绪' if model_ready else '未就绪'}\n"
             "- 微信聊天数据：已切换到 D 盘目录"
         )
         return {

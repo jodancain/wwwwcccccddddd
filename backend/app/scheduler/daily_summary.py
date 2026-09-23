@@ -374,6 +374,8 @@ class DailySummaryScheduler:
         for transport in self._daily_summary_transport_order():
             if transport == "ui_auto":
                 result = self._send_via_wechat_automator(receiver, text, share_url)
+            elif transport == "hermes":
+                result = self._send_via_hermes_weixin(text, html_path, share_url)
             elif transport == "openclaw":
                 result = self._send_via_openclaw_weixin(text, html_path, share_url)
             else:
@@ -402,13 +404,13 @@ class DailySummaryScheduler:
         }
 
     def _daily_summary_transport_order(self) -> list[str]:
-        raw = self.settings.DAILY_SUMMARY_SEND_TRANSPORT_ORDER or "openclaw"
+        raw = self.settings.DAILY_SUMMARY_SEND_TRANSPORT_ORDER or "hermes"
         order = []
         for item in raw.split(","):
             name = item.strip().lower().replace("-", "_")
             if name and name not in order:
                 order.append(name)
-        return order or ["openclaw"]
+        return order or ["hermes"]
 
     def _send_via_wechat_automator(self, receiver: str, text: str, share_url: str = "") -> dict:
         try:
@@ -434,6 +436,7 @@ class DailySummaryScheduler:
         return normalized in {
             "weixinclawbot",
             (self.settings.AGENT_WECHAT_ENTRY_NAME or "").strip().lower(),
+            "hermes",
             "bot",
         }
 
@@ -668,6 +671,121 @@ class DailySummaryScheduler:
 </body>
 </html>
 """
+
+    def _send_via_hermes_weixin(
+        self,
+        text: str,
+        html_path: Path | None = None,
+        share_url: str = "",
+    ) -> dict:
+        if share_url:
+            share_text = self._build_share_message(text, share_url)
+            share_result = self._run_hermes_weixin_sender(share_text)
+            if share_result.get("sent"):
+                return {
+                    **share_result,
+                    "method": "hermes-weixin-share-link",
+                    "share_url": share_url,
+                    "share_sent": True,
+                    "parts": 1,
+                }
+            logger.warning(
+                "Hermes share-link daily summary send failed, falling back to document/text: "
+                f"{share_result.get('error', '')}"
+            )
+
+        if html_path and html_path.exists():
+            file_result = self._run_hermes_weixin_sender(
+                "每日微信总结已生成，完整报告见附件。",
+                media_path=html_path,
+            )
+            if file_result.get("sent"):
+                return {
+                    **file_result,
+                    "method": "hermes-weixin-html-file",
+                    "html_path": str(html_path),
+                    "html_sent": True,
+                    "parts": 1,
+                }
+            logger.warning(
+                "Hermes HTML daily summary send failed, falling back to text: "
+                f"{file_result.get('error', '')}"
+            )
+
+        parts = self._split_weixin_text(text, max_chars=3600)
+        message_ids = []
+        for index, part in enumerate(parts, start=1):
+            body = part if len(parts) == 1 else f"每日微信总结 ({index}/{len(parts)})\n\n{part}"
+            result = self._run_hermes_weixin_sender(body)
+            if not result.get("sent"):
+                return {
+                    "sent": False,
+                    "method": "hermes-weixin",
+                    "message_id": message_ids[-1] if message_ids else "",
+                    "message_ids": message_ids,
+                    "error": result.get("error", ""),
+                }
+            message_ids.append(result.get("message_id", ""))
+            if index < len(parts):
+                time.sleep(0.5)
+        return {
+            "sent": bool(message_ids),
+            "method": "hermes-weixin",
+            "message_id": message_ids[-1] if message_ids else "",
+            "message_ids": message_ids,
+            "parts": len(parts),
+        }
+
+    def _run_hermes_weixin_sender(self, message: str, media_path: Path | None = None) -> dict:
+        try:
+            hermes_home = Path(
+                self.settings.HERMES_HOME
+                or os.getenv("HERMES_HOME", "")
+                or (Path.home() / "AppData" / "Local" / "hermes")
+            ).expanduser().resolve()
+            hermes_python = Path(
+                self.settings.HERMES_PYTHON
+                or (hermes_home.parent / "hermes-agent" / "venv" / "Scripts" / "python.exe")
+            ).expanduser().resolve()
+            send_script = Path(self.settings.HERMES_SEND_SCRIPT).expanduser().resolve()
+            if not self.settings.HERMES_SEND_SCRIPT:
+                send_script = Path(__file__).resolve().parents[3] / "scripts" / "hermes_weixin_send.py"
+            if not hermes_python.exists():
+                raise RuntimeError(f"Hermes Python was not found: {hermes_python}")
+            if not send_script.exists():
+                raise RuntimeError(f"Hermes Weixin sender was not found: {send_script}")
+
+            command = [str(hermes_python), str(send_script)]
+            if media_path is not None:
+                command.extend(["--media", str(media_path.resolve())])
+            completed = subprocess.run(
+                command,
+                input=message,
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=240,
+                env={
+                    **os.environ,
+                    "HERMES_HOME": str(hermes_home),
+                    "PYTHONUTF8": "1",
+                    "PYTHONIOENCODING": "utf-8",
+                },
+            )
+            output = (completed.stdout or "").strip()
+            payload = self._parse_first_json_object(output) if output else {}
+            if completed.returncode == 0 and payload.get("success"):
+                return {
+                    "sent": True,
+                    "method": "hermes-weixin",
+                    "message_id": str(payload.get("message_id") or ""),
+                }
+            error = str(payload.get("error") or (completed.stderr or output or "Hermes send failed")).strip()
+            return {"sent": False, "method": "hermes-weixin", "error": error[-2000:]}
+        except Exception as exc:  # noqa: BLE001
+            return {"sent": False, "method": "hermes-weixin", "error": str(exc)}
 
     def _send_via_openclaw_weixin(
         self,

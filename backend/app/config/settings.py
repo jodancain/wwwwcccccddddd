@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     CLAUDE_CODE_CLI_PATH: str = ""
     CLAUDE_CODE_MODEL: str = "sonnet"
 
+    # Hermes Agent owns the Weixin conversation and calls WeChatAI through MCP.
+    HERMES_HOME: str = ""
+    HERMES_CLI_PATH: str = ""
+    HERMES_PYTHON: str = ""
+    HERMES_SEND_SCRIPT: str = ""
+    HERMES_GATEWAY_PID_FILE: str = ""
+
     # Sync
     SYNC_INTERVAL_SECONDS: int = 7
     DECRYPT_INTERVAL_SECONDS: int = 300
@@ -63,7 +70,7 @@ class Settings(BaseSettings):
     DAILY_SUMMARY_EXTERNAL_CONTEXT_ENABLED: bool = True
     DAILY_SUMMARY_EXTERNAL_CONTEXT_MAX_TOPICS: int = 8
     DAILY_SUMMARY_EXTERNAL_CONTEXT_RESULTS_PER_TOPIC: int = 3
-    DAILY_SUMMARY_SEND_TRANSPORT_ORDER: str = "openclaw"
+    DAILY_SUMMARY_SEND_TRANSPORT_ORDER: str = "hermes"
 
     # Server
     APP_HOST: str = "127.0.0.1"

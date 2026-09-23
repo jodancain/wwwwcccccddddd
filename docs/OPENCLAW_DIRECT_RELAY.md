@@ -1,4 +1,8 @@
-# OpenClaw direct relay
+# OpenClaw direct relay (legacy rollback only)
+
+This integration has been replaced by the native Hermes Weixin gateway. It is
+retained only as rollback documentation and is no longer started by WeChatAI.
+See [Hermes Weixin integration](HERMES_WEIXIN.md).
 
 The Weixin channel uses OpenClaw only for transport. OpenClaw's model provider
 is configured to call the local WeChatAI Anthropic-compatible relay:

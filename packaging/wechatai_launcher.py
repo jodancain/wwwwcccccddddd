@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import os
-import socket
 import shutil
 import subprocess
 import sys
@@ -66,77 +64,81 @@ def _open_browser_later(url: str) -> None:
     threading.Thread(target=run, daemon=True).start()
 
 
-def _ensure_openclaw_gateway(port: int = 18789) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.4):
-            return True
-    except OSError:
-        pass
-
-    gateway_script = Path.home() / ".openclaw" / "gateway.cmd"
-    if not gateway_script.exists():
+def _ensure_hermes_gateway(runtime_dir: Path) -> bool:
+    hermes_home = Path(
+        os.environ.get("HERMES_HOME")
+        or (Path.home() / "AppData" / "Local" / "hermes")
+    ).expanduser()
+    hermes = hermes_home / "bin" / "hermes.exe"
+    if not hermes.exists():
         return False
 
+    env = {**os.environ, "HERMES_HOME": str(hermes_home)}
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    try:
-        subprocess.Popen(
-            [str(gateway_script)],
-            cwd=str(Path.home()),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=creation_flags,
-        )
-    except OSError:
-        return False
 
-    deadline = time.monotonic() + 12
-    while time.monotonic() < deadline:
+    def is_running() -> bool:
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.4):
-                return True
-        except OSError:
-            time.sleep(0.4)
-    return False
+            status = subprocess.run(
+                [str(hermes), "gateway", "status"],
+                capture_output=True,
+                text=True,
+                timeout=12,
+                env=env,
+                creationflags=creation_flags,
+                check=False,
+            )
+            output = f"{status.stdout}\n{status.stderr}".lower()
+            return status.returncode == 0 and "not running" not in output
+        except (OSError, subprocess.SubprocessError):
+            return False
 
+    if is_running():
+        return True
 
-def _configure_openclaw_relay(relay_base_url: str) -> bool:
-    openclaw = shutil.which("openclaw.cmd") or shutil.which("openclaw")
-    if not openclaw:
-        return False
-
-    operations = [
-        {
-            "path": "models.providers.wechatai",
-            "value": {
-                "baseUrl": relay_base_url,
-                "apiKey": "local-only",
-                "models": [
-                    {
-                        "id": "wechatai-direct-agent",
-                        "name": "WeChatAI Direct Agent",
-                        "api": "anthropic-messages",
-                        "input": ["text"],
-                        "contextTokens": 200000,
-                        "maxTokens": 8192,
-                    }
-                ],
-            },
-        },
-        {"path": "agents.defaults.model.primary", "value": "wechatai/wechatai-direct-agent"},
-    ]
     try:
-        completed = subprocess.run(
-            [openclaw, "config", "set", "--batch-json", json.dumps(operations, separators=(",", ":"))],
-            cwd=str(Path.home()),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        started = subprocess.run(
+            [str(hermes), "gateway", "start"],
+            capture_output=True,
+            text=True,
             timeout=45,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            env=env,
+            creationflags=creation_flags,
             check=False,
         )
-        return completed.returncode == 0
     except (OSError, subprocess.SubprocessError):
-        return False
+        started = None
+
+    if started is None or started.returncode != 0:
+        try:
+            installed = subprocess.run(
+                [
+                    str(hermes),
+                    "gateway",
+                    "install",
+                    "--force",
+                    "--start-now",
+                    "--start-on-login",
+                ],
+                cwd=str(runtime_dir),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=120,
+                env=env,
+                creationflags=creation_flags,
+                check=False,
+            )
+            if installed.returncode != 0:
+                return False
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    deadline = time.monotonic() + 35
+    while time.monotonic() < deadline:
+        if is_running():
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def main() -> None:
@@ -150,18 +152,14 @@ def main() -> None:
 
     settings = get_settings()
     url = f"http://{settings.APP_HOST}:{settings.APP_PORT}"
-    openclaw_configured = _configure_openclaw_relay(
-        f"http://127.0.0.1:{settings.APP_PORT}/relay/v1"
-    )
-    openclaw_ready = _ensure_openclaw_gateway()
+    hermes_ready = _ensure_hermes_gateway(runtime_dir)
 
     print("=" * 58)
     print("WeChatAI portable is starting")
     print(f"Config: {runtime_dir / '.env'}")
     print(f"Data:   {runtime_dir / 'data'}")
     print(f"URL:    {url}")
-    print(f"OpenClaw relay: {'configured' if openclaw_configured else 'not configured'}")
-    print(f"OpenClaw gateway: {'ready' if openclaw_ready else 'not available'}")
+    print(f"Hermes gateway: {'ready' if hermes_ready else 'not available'}")
     print("=" * 58)
     print("Keep this window open while using WeChatAI.")
     print("Press Ctrl+C or close the window to stop the server.")

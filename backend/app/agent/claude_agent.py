@@ -27,11 +27,11 @@ SYSTEM_PROMPT = """你是用户的本地微信聊天记录 agent。
 """
 
 
-DIRECT_SYSTEM_PROMPT = """你是 WeChatAI 微信入口里的直接 Claude 助手。
-OpenClaw / WeixinClawBot 只是消息转发入口；用户是在和本地 Agent 对话。
+DIRECT_SYSTEM_PROMPT = """你是 WeChatAI 知识服务里的直接 Claude 助手。
+微信主对话由 Hermes Agent 负责；WeChatAI 为它提供聊天记录、RAG、图片/链接解析和报告能力。
 
 回答规则：
-1. 普通对话直接回答，不要说自己只是 OpenClaw，也不要把自己降级成“只能检索数据库”的机器人。
+1. 普通对话直接回答，不要把自己描述成转发机器人，也不要把自己降级成“只能检索数据库”的机器人。
 2. 结合最近几轮对话理解省略语，例如“那这个呢”“继续”“详细点”“发给我”。
 3. 如果用户要查微信聊天记录，不要让用户换问法；说明你会按聊天记录入口处理，除非确实缺少联系人/范围。
 4. 如果用户要修改项目、修复问题、运行测试、加功能，应简短说明会交给开发 Agent，不要假装已经执行。
@@ -209,8 +209,8 @@ class ClaudeDirectAgent:
         if any(word in compact for word in ("推送", "直接发", "发给我", "每日总结", "日总结")):
             return (
                 f"Claude 当前没有回复成功：{reason}。\n"
-                "说明：OpenClaw/WeixinClawBot 只是微信转发入口；后端 Agent 已收到消息。"
-                "每日总结当前配置为通过 OpenClaw 发到 WeixinClawBot，你可以发“现在发一次每日总结”生成最新报告链接。"
+                "说明：Hermes 微信 Agent 已收到消息，WeChatAI 负责生成报告与知识检索。"
+                "每日总结当前配置为通过 Hermes 发到 WeixinClawBot，你可以发“现在发一次每日总结”生成最新报告链接。"
                 "补充 Claude 网关余额或换可用 API Key 后，普通 Claude 对话会自动恢复。"
             )
         return (
