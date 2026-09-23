@@ -54,4 +54,6 @@ In Weixin, send `测试`, then ask `总结最近聊天记录`. The second reques
 
 ## Daily report delivery
 
-WeChatAI still generates the report. `DAILY_SUMMARY_SEND_TRANSPORT_ORDER=hermes` invokes `scripts/hermes_weixin_send.py`, which uses Hermes' native iLink sender and persisted context token. The preferred delivery is a short preview plus the Tailscale report link, with document and split-text fallbacks.
+WeChatAI still generates the report. `DAILY_SUMMARY_SEND_TRANSPORT_ORDER=hermes` invokes `scripts/hermes_weixin_send.py`, which uses Hermes' native iLink sender and persisted context token. The preferred delivery is a short preview plus a token-protected `https://wechat.youngtuo.win/share/...` link, with document and split-text fallbacks. The Cloudflare route only publishes `/share/*`; API, relay, and administration routes remain private.
+
+`scripts/ensure_cloudflare_tunnel.ps1` keeps the named Cloudflare tunnel running without a visible window and installs a per-user Windows login startup entry. The tunnel credential stays in the local `cloudflared-wechat/tunnel.token` file outside the repository.

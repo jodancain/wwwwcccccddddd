@@ -244,6 +244,7 @@ WeChatai/
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com/v1` | Anthropic 或兼容 Messages API 地址 |
 | `VOYAGE_API_KEY` | - | Voyage embedding API Key |
 | `DAILY_SUMMARY_HOURS` | `0` | 日报范围；`0` 表示全部已同步记录 |
+| `DAILY_SUMMARY_SHARE_BASE_URL` | - | 日报链接的公网域名，例如 `https://wechat.youngtuo.win` |
 | `SYNC_INTERVAL_SECONDS` | `7` | 消息同步间隔 |
 | `WX_LISTENER_TEMP_DIR` | 系统临时目录 | 实时监听的短期解密快照目录，建议使用本机非系统盘 |
 | `APP_PORT` | `8090` | 后端端口 |
@@ -255,4 +256,5 @@ WeChatai/
 - 微信数据解密使用 [wdecipher](https://github.com/gndlwch2w/wdecipher) 库
 - 消息发送通过 PyAutoGUI 操控微信窗口，发送时微信窗口会短暂弹出
 - 原始数据库、索引和报告存储在本机；启用云端 AI、embedding、图片理解或链接抓取时，完成该功能所需的文本、图片或 URL 会发送到你配置的服务商
+- `wechat.youngtuo.win` 的 Cloudflare 隧道只发布带随机令牌的 `/share/*` 报告页，不发布后台 API
 - `/api/*` 与 `/relay/*` 默认仅允许本机访问；Tailscale 或其他项目必须使用 `/open/v1/*` 和最小权限 API Key

@@ -71,10 +71,18 @@ if exist "frontend\dist\index.html" (
     echo [INFO] 配置并启动 Hermes 微信 Agent...
     powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\configure_hermes_weixin.ps1"
     powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\ensure_hermes_gateway.ps1" -WorkingDirectory "%PROJECT_DIR%"
+    echo [INFO] 启动公网报告隧道...
+    powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\ensure_cloudflare_tunnel.ps1"
+    if errorlevel 1 (
+        echo [ERROR] 公网报告隧道启动失败
+        pause
+        exit /b 1
+    )
     echo.
     echo ==========================================
     echo    WeChatAI 已启动!
     echo    打开浏览器访问: http://localhost:8090
+    echo    公网报告域名: https://wechat.youngtuo.win
     echo ==========================================
     echo.
     echo 按 Ctrl+C 停止服务
@@ -93,6 +101,13 @@ if exist "frontend\dist\index.html" (
     echo [INFO] 配置并启动 Hermes 微信 Agent...
     powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\configure_hermes_weixin.ps1"
     powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\ensure_hermes_gateway.ps1" -WorkingDirectory "%PROJECT_DIR%"
+    echo [INFO] 启动公网报告隧道...
+    powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\ensure_cloudflare_tunnel.ps1"
+    if errorlevel 1 (
+        echo [ERROR] 公网报告隧道启动失败
+        pause
+        exit /b 1
+    )
 
     :: Start frontend
     echo [2/2] 启动前端 (端口 5175)...
@@ -106,6 +121,7 @@ if exist "frontend\dist\index.html" (
     echo ==========================================
     echo    WeChatAI 已启动!
     echo    打开浏览器访问: http://localhost:5175
+    echo    公网报告域名: https://wechat.youngtuo.win
     echo ==========================================
     echo.
     echo 关闭此窗口将同时停止所有服务

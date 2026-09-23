@@ -124,6 +124,11 @@ if (-not $backendReady -or -not $frontendReady) {
     throw "WeChatAI restart incomplete: backend=$backendReady frontend=$frontendReady logs=$logDir"
 }
 
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "ensure_cloudflare_tunnel.ps1")
+if ($LASTEXITCODE -ne 0) {
+    throw "Cloudflare public report tunnel did not become ready"
+}
+
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "configure_hermes_weixin.ps1") `
     -WeChatAIBaseUrl "http://127.0.0.1:$BackendPort"
 if ($LASTEXITCODE -ne 0) {
@@ -139,3 +144,4 @@ Write-Host "WeChatAI restarted successfully."
 Write-Host "Frontend: http://127.0.0.1:$FrontendPort/"
 Write-Host "Backend:  http://127.0.0.1:$BackendPort/"
 Write-Host "Weixin:   Hermes gateway ready"
+Write-Host "Reports:  https://wechat.youngtuo.win/share/"
