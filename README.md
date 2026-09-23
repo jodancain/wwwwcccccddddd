@@ -245,6 +245,7 @@ WeChatai/
 | `VOYAGE_API_KEY` | - | Voyage embedding API Key |
 | `DAILY_SUMMARY_HOURS` | `0` | 日报范围；`0` 表示全部已同步记录 |
 | `SYNC_INTERVAL_SECONDS` | `7` | 消息同步间隔 |
+| `WX_LISTENER_TEMP_DIR` | 系统临时目录 | 实时监听的短期解密快照目录，建议使用本机非系统盘 |
 | `APP_PORT` | `8090` | 后端端口 |
 | `INFERENCE_PORT` | `8091` | 本地分身模型推理服务端口 |
 

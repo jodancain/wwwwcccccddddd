@@ -94,19 +94,30 @@ class RealtimeListener:
 
         Returns {username: last_timestamp} — small payload, fast diff.
         """
-        tmp_path = decrypt_db_to_tempfile(db_path, enc_key, suffix=".session.tmp")
+        temp_dir = (self.settings.WX_LISTENER_TEMP_DIR or "").strip() or None
+        tmp_path = decrypt_db_to_tempfile(
+            db_path,
+            enc_key,
+            suffix=".session.tmp",
+            temp_dir=temp_dir,
+        )
+        conn: Optional[sqlite3.Connection] = None
         try:
             conn = sqlite3.connect(tmp_path)
             rows = conn.execute(
                 "SELECT username, last_timestamp FROM SessionTable WHERE last_timestamp > 0"
             ).fetchall()
-            conn.close()
             return {r[0]: int(r[1] or 0) for r in rows}
         finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
             try:
                 os.unlink(tmp_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.warning(f"Unable to remove realtime snapshot {tmp_path}: {exc}")
 
     # ------------------------------------------------------------------
     def _poll_loop(self) -> None:

@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     # Weixin 4.x: override path to db_storage directory.
     # If empty, the decryptor will auto-detect via %APPDATA%\Tencent\xwechat\config.
     WX_DB_DIR: str = ""
+    # Optional local directory for short-lived realtime-listener snapshots.
+    # Keep this on a local disk; network shares add latency to every poll.
+    WX_LISTENER_TEMP_DIR: str = ""
     # Weixin 4.x database data key. Optional 64-char hex key captured by an
     # external helper; when set, the decryptor verifies it against each DB.
     WX_DB_KEY: str = ""

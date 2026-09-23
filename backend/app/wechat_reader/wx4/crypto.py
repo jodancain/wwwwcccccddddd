@@ -123,10 +123,17 @@ def decrypt_database(db_path: str, out_path: str, enc_key: bytes) -> bool:
     return True
 
 
-def decrypt_db_to_tempfile(db_path: str, enc_key: bytes, suffix: str = ".tmp") -> str:
+def decrypt_db_to_tempfile(
+    db_path: str,
+    enc_key: bytes,
+    suffix: str = ".tmp",
+    temp_dir: str | None = None,
+) -> str:
     """Decrypt to a temp file and return its path. Caller must delete it."""
     data = decrypt_db_to_memory(db_path, enc_key)
-    fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="wx4_")
+    if temp_dir:
+        os.makedirs(temp_dir, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="wx4_", dir=temp_dir)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
