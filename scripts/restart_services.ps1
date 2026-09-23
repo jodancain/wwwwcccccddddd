@@ -75,6 +75,23 @@ function Wait-HttpReady {
     return $false
 }
 
+function Get-BackendDataDirectory {
+    param([string]$BackendDirectory)
+
+    $configured = "data"
+    $envPath = Join-Path $BackendDirectory ".env"
+    $line = Get-Content -LiteralPath $envPath |
+        Where-Object { $_ -match "^\s*DATA_DIR\s*=" } |
+        Select-Object -Last 1
+    if ($line) {
+        $configured = (($line -split "=", 2)[1]).Trim().Trim('"').Trim("'")
+    }
+    if ([IO.Path]::IsPathRooted($configured)) {
+        return [IO.Path]::GetFullPath($configured)
+    }
+    return [IO.Path]::GetFullPath((Join-Path $BackendDirectory $configured))
+}
+
 Stop-WeChatAIListener -Port $BackendPort -Kind "backend"
 Stop-WeChatAIListener -Port $FrontendPort -Kind "frontend"
 Start-Sleep -Seconds 1
@@ -89,7 +106,9 @@ if ($LASTEXITCODE -ne 0) {
     throw "OpenClaw gateway did not become ready"
 }
 
-$logDir = Split-Path $backendDir -Parent
+$dataDir = Get-BackendDataDirectory -BackendDirectory $backendDir
+$logDir = Join-Path $dataDir "service-logs"
+New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $env:WECHATAI_FRONTEND_DIST = Join-Path $frontendDir "dist"
 Start-Process `

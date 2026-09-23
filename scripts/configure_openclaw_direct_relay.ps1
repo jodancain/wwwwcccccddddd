@@ -4,6 +4,17 @@ param(
 
 $ErrorActionPreference = "Stop"
 $targetModel = "wechatai/wechatai-direct-agent"
+$stateEntry = Get-Item -LiteralPath (Join-Path $HOME ".openclaw") -ErrorAction SilentlyContinue
+$stateDir = if ($stateEntry -and $stateEntry.Target) {
+    [string]@($stateEntry.Target)[0]
+} else {
+    Join-Path $HOME ".openclaw"
+}
+$runtimeTemp = Join-Path (Split-Path $stateDir -Parent) "openclaw-runtime-temp"
+New-Item -ItemType Directory -Path $runtimeTemp -Force | Out-Null
+$env:TMPDIR = $runtimeTemp
+$env:TEMP = $runtimeTemp
+$env:TMP = $runtimeTemp
 $openClaw = Get-Command "openclaw.cmd" -ErrorAction SilentlyContinue
 if (-not $openClaw) {
     $openClaw = Get-Command "openclaw" -ErrorAction SilentlyContinue
